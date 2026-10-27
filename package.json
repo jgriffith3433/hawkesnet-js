@@ -1,0 +1,20 @@
+{
+  "name": "@hawkesgen/net",
+  "version": "1.2.1",
+  "description": "Hawkes Net's client SDK: multiplayer rooms for web games (relay or peer to peer), messages, avatars, synced state, express frames, the shared clock and background play. https://net.hawkesgen.com",
+  "type": "module",
+  "main": "./hawkes-net.mjs",
+  "types": "./hawkes-net.d.ts",
+  "exports": {
+    ".": {
+      "types": "./hawkes-net.d.ts",
+      "default": "./hawkes-net.mjs"
+    },
+    "./core": "./hawkes-net-core.mjs"
+  },
+  "files": ["hawkes-net.mjs", "hawkes-net-core.mjs", "hawkes-net.d.ts", "README.md", "LICENSE"],
+  "sideEffects": false,
+  "license": "MIT",
+  "homepage": "https://net.hawkesgen.com",
+  "keywords": ["multiplayer", "networking", "webrtc", "websocket", "relay", "game", "babylonjs", "netcode"]
+}
