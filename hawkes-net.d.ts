@@ -1,5 +1,5 @@
 // Types for hawkes-net.mjs (Hawkes Net: multiplayer for web games, docs/net.md). Served beside the SDK at
-// https://net.hawkesgen.com/sdk/hawkes-net@1.d.ts; keep it in step with hawkes-net.mjs.
+// https://net.hawkesgen.ai/sdk/hawkes-net@1.d.ts; keep it in step with hawkes-net.mjs.
 
 export declare const VERSION: string;
 export declare const protocols: readonly number[];
@@ -20,7 +20,7 @@ export interface RoomConfig {
 }
 
 export interface JoinOptions {
-  /** A Hawkes Net project whose sites may ask without a key (yours is your account's, usr_...: list its sites on net.hawkesgen.com). */
+  /** A Hawkes Net project whose sites may ask without a key (yours is your account's, usr_...: list its sites on net.hawkesgen.ai). */
   project?: string;
   /** A ticket from your server, or a function that asks your server for one (called again on reconnects and moves). */
   ticket?: string | (() => Promise<Ticket> | Ticket);
@@ -32,7 +32,7 @@ export interface JoinOptions {
   role?: 'player' | 'spectator' | 'bot' | 'test';
   /** The room's shape if this join opens it. */
   config?: RoomConfig;
-  /** The Hawkes Net service (default `defaultEndpoint()`: https://net.hawkesgen.com, or the page's `globalThis.HAWKES_NET_ENDPOINT`). */
+  /** The Hawkes Net service (default `defaultEndpoint()`: https://net.hawkesgen.ai, or the page's `globalThis.HAWKES_NET_ENDPOINT`). */
   endpoint?: string;
   /** A Gen API key: servers, bots and tests only, never a page. */
   key?: string;
@@ -238,5 +238,5 @@ export declare function lobby(o?: LobbyOptions): Lobby;
 declare const _default: { join: typeof join; lobby: typeof lobby; VERSION: string; protocols: readonly number[]; Track: unknown; Links: unknown };
 export default _default;
 
-/** The service a join uses when it names none: `globalThis.HAWKES_NET_ENDPOINT` when the page sets it to an origin, else https://net.hawkesgen.com. */
+/** The service a join uses when it names none: `globalThis.HAWKES_NET_ENDPOINT` when the page sets it to an origin, else https://net.hawkesgen.ai. */
 export declare function defaultEndpoint(): string;

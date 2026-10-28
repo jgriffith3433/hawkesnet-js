@@ -2,7 +2,7 @@
 // runs in a relay node (src/net/node.ts) and in a host player's page (a p2p room's host runs the room here and forwards
 // to its peers), so a room can move between the two without changing what anyone sees.
 //
-// Messages inside the core keep the shapes of the portal's protocol 2 (hawkesgen.com src/relay.ts, where this came
+// Messages inside the core keep the shapes of the portal's protocol 2 (hawkesgen.ai src/relay.ts, where this came
 // from): { t: 'me' | 'xf' | 'ev' | 'own' | 'clear' | 'ping' }. A connection speaks protocol 2 (JSON bundles) or 3
 // (binary, below); each has its own encoder, so both kinds of page share one room.
 //
@@ -17,7 +17,7 @@
 // synced states (only the keys that changed since that connection last got them).
 
 export const PROTOCOL = 3;
-export const VERSION = '1.2.1';
+export const VERSION = '1.3.0';
 
 /** Room defaults; a room's config and its ticket's limits narrow them. */
 export const DEFAULT_LIMITS = {

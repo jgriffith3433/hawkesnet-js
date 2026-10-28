@@ -19,12 +19,12 @@ export const VERSION = core.VERSION;
 export const protocols = Object.freeze([3]);
 export const Track = core.Track;
 export const Links = core.Links;
-/** The Hawkes Net service a join uses when it names none: https://net.hawkesgen.com, or the one the page names in
- *  globalThis.HAWKES_NET_ENDPOINT (an origin, e.g. https://hawkesnet.hawkesgen.com: Hawkes Studio sets it on its beta
+/** The Hawkes Net service a join uses when it names none: https://net.hawkesgen.ai, or the one the page names in
+ *  globalThis.HAWKES_NET_ENDPOINT (an origin, e.g. https://hawkesnet.hawkesgen.ai: Hawkes Studio sets it on its beta
  *  sites, so a game's beta plays on beta Hawkes Net and its live site on the real one, with no change to the game). */
 export function defaultEndpoint() {
   const asked = typeof globalThis !== 'undefined' ? globalThis.HAWKES_NET_ENDPOINT : undefined;
-  return typeof asked === 'string' && /^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(asked) ? asked : 'https://net.hawkesgen.com';
+  return typeof asked === 'string' && /^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(asked) ? asked : 'https://net.hawkesgen.ai';
 }
 const DEFAULT_ICE = [{ urls: ['stun:stun.cloudflare.com:3478'] }, { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 const PING_MS = 5000;
@@ -135,7 +135,7 @@ class Emitter {
 /**
  * Joins a room. Resolves when the room's state has arrived (`ready`), rejects when the join is refused.
  * o: { project, transport: 'relay' (default) | 'auto' | 'p2p', ticket (a string, or a function returning Gen's ticket answer),
- *      endpoint (the Hawkes Net service, default defaultEndpoint(): https://net.hawkesgen.com or the page's HAWKES_NET_ENDPOINT), key (a Gen API key: servers and bots only), name, sub, role,
+ *      endpoint (the Hawkes Net service, default defaultEndpoint(): https://net.hawkesgen.ai or the page's HAWKES_NET_ENDPOINT), key (a Gen API key: servers and bots only), name, sub, role,
  *      config (the room's shape if this join creates it), leaveOnHide (default true), away (default true: tell the room
  *      when this page is in the background, docs/net.md "Away"), rtc ({ RTCPeerConnection } in Node),
  *      WebSocket (a WebSocket class, default the global one), log (false to silence),
@@ -246,7 +246,7 @@ class Room {
   /** State sync, ownership and snapshot buffers (the portal's H.sync). */
   get sync() { return this._sync || (this._sync = this._makeSync()); }
   /**
-   * For an engine with its own multiplayer logic (hawkesgen.com's play/net.js): it gets every room message through
+   * For an engine with its own multiplayer logic (hawkesgen.ai's play/net.js): it gets every room message through
    * `onRaw` (join option) in the core's shapes ({ t: 'hello' | 'join' | 'leave' | 'host' | 'me' | 'xf' | 'own' | 'ops' | 'ev' | 'clear' }),
    * and sends its own here: { t: 'me', at, s }, { t: 'xf', at, x: [[id, mask, ...values]] }, { t: 'own', id, on, lock },
    * { t: 'ev', name, data, self?, to?, reliable? }, { t: 'clear' }. Hawkes Net still does the rest: the transport, moving the
