@@ -18,13 +18,15 @@
   // The SDK from this folder (npm: import { lobby } from '@hawkesgen/net'). ?net= another Hawkes Net (an origin);
   // ?project= your project. On a Studio beta site the page names beta Hawkes Net (window.HAWKES_NET_ENDPOINT).
   import { lobby, VERSION } from '../hawkes-net.mjs';
+  import { installNetPlaytest } from './net-playtest.mjs';
   const q = new URLSearchParams(location.search);
   const endpoint = q.get('net') || undefined;
   document.getElementById('net').textContent = `@hawkesgen/net ${VERSION} on ` + (endpoint || globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, '');
   const name = 'Player ' + Math.floor(Math.random() * 900 + 100);
   // No liveHosts: every page gets the project's free test rooms.
   // Only name an endpoint when asked: an endpoint given as undefined would override the SDK's default.
-  const net = lobby({ project: q.get('project') || 'netdemo', name, transport: 'relay', ...(endpoint ? { endpoint } : {}) });
+  const opts = { project: q.get('project') || 'netdemo', transport: 'relay', ...(endpoint ? { endpoint } : {}) };
+  const net = lobby({ ...opts, name });
   net.join('js-demo');
   const me = { x: 0.5, y: 0.5 };
   const others = new Map();
@@ -35,6 +37,20 @@
   addEventListener('pointermove', move);
   addEventListener('pointerdown', move);
   setInterval(() => net.pose([me.x, me.y, 0]), 50);
+
+  // Studio's playtest bot (net-playtest.mjs): a second player in this page, the dot moved by real pointer input.
+  const pointer = (x, y) => dispatchEvent(new PointerEvent('pointermove', { clientX: x * innerWidth, clientY: y * innerHeight, bubbles: true }));
+  installNetPlaytest({
+    product: 'hawkes-net-js',
+    where: (endpoint || globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, ''),
+    main: () => net,
+    openBot: async () => { const b = lobby({ ...opts, name: 'Playtest bot', log: false }); b.join('js-demo'); return b; },
+    drive: async (step) => { for (let i = 0; i <= 30; i++) { pointer(0.2 + i * 0.02, 0.3 + Math.sin(i / 5) * 0.1); await step(60); } },
+    myPos: () => [me.x, me.y, 0],
+    shownPos: (id) => { const o = others.get(id); return o ? [o.x, o.y, 0] : null; },
+    botPose: (u) => [0.25 + 0.5 * u, 0.75, 0],
+    tolerance: 0.02,
+  });
 
   const c = document.getElementById('c'), g = c.getContext('2d');
   const dot = (x, y, color, label) => {
