@@ -1,0 +1,109 @@
+# Pull requests into beta merge by themselves (Jaycee, 2026-11-01: "Just have all work automatically merge into beta").
+# Beta only: nothing here touches main, which stays a person's call (Studio's go-live).
+#
+# - Which: a pull request into beta from a branch of this repo (never a fork), not a draft, without the label `hold`.
+#   Studio's own agent changes (branches task/<id>- and fix/<id>-, ids of 12 hex digits) are left to Studio, which
+#   merges them itself once its checks pass.
+# - Checks: it waits for every other check on the pull request's commit to finish, and merges only when none failed.
+#   A repo with no checks merges at once.
+# - Deploy: a merge made with this workflow's token doesn't start other workflows (GitHub's rule), so afterwards it
+#   starts every workflow here that runs on a push to beta and can be started by hand (the beta deploy, Studio's
+#   hook), unless the pull request only changed files under .github/.
+# - Can't merge: a conflict with beta, a failed check, or a change to .github/workflows (GitHub refuses that to this
+#   token) fails this run with the reason; the pull request stays open for a person.
+name: Merge into beta
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, unlabeled]
+    branches: [beta]
+concurrency:
+  group: beta-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  checks: read
+  statuses: read
+jobs:
+  merge:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft &&
+      !contains(github.event.pull_request.labels.*.name, 'hold')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Wait for checks, then merge into beta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          BRANCH: ${{ github.head_ref }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if echo "$BRANCH" | grep -Eq '^(task|fix)/[0-9a-f]{12}-'; then
+            echo "$BRANCH is a Studio agent change: Studio merges it itself."; exit 0
+          fi
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
+          if echo "$files" | grep -q '^\.github/workflows/'; then
+            echo "::error::#$PR changes .github/workflows, which this workflow's token may not merge: a person merges it."; exit 1
+          fi
+          # Other checks on this commit: wait until all have finished (this run's own job excluded).
+          sleep 20
+          for i in $(seq 1 80); do
+            runs=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
+              --jq "[.check_runs[] | select(.name != \"merge\" and ((.details_url // \"\") | contains(\"/runs/$RUN_ID/\") | not))]")
+            pending=$(echo "$runs" | jq '[.[] | select(.status != "completed")] | length')
+            failed=$(echo "$runs" | jq -r '[.[] | select(.status == "completed" and (.conclusion | IN("success","neutral","skipped") | not)) | .name] | join(", ")')
+            sp=$(gh api "repos/$REPO/commits/$SHA/status" --jq '[.statuses[] | select(.state == "pending")] | length')
+            sf=$(gh api "repos/$REPO/commits/$SHA/status" --jq '[.statuses[] | select(.state == "failure" or .state == "error") | .context] | join(", ")')
+            if [ -n "$failed$sf" ]; then echo "::error::checks failed on #$PR: $failed $sf"; exit 1; fi
+            [ "$pending" = 0 ] && [ "$sp" = 0 ] && break
+            echo "waiting for $pending check(s) and $sp status(es)"; sleep 30
+          done
+          [ "$pending" = 0 ] && [ "$sp" = 0 ] || { echo "::error::checks still running after 40 minutes"; exit 1; }
+          # GitHub works out mergeability in the background: wait for it.
+          for i in $(seq 1 12); do
+            state=$(gh api "repos/$REPO/pulls/$PR" --jq '.mergeable_state')
+            [ "$state" != unknown ] && break
+            sleep 5
+          done
+          echo "mergeable_state: $state"
+          case "$state" in
+            dirty) echo "::error::#$PR conflicts with beta: merge beta into the branch and push."; exit 1 ;;
+            draft) echo "#$PR is a draft."; exit 0 ;;
+          esac
+          title=$(gh api "repos/$REPO/pulls/$PR" --jq '.title')
+          gh api -X PUT "repos/$REPO/pulls/$PR/merge" -f merge_method=merge -f sha="$SHA" -f commit_title="$title (#$PR)" --jq '.message'
+          echo "MERGED=1" >> "$GITHUB_ENV"
+          if echo "$files" | grep -qv '^\.github/'; then echo "DEPLOY=1" >> "$GITHUB_ENV"; fi
+      - uses: actions/checkout@v4
+        if: env.MERGED == '1' && env.DEPLOY == '1'
+        with:
+          ref: beta
+          sparse-checkout: .github/workflows
+      - name: Start beta's workflows
+        if: env.MERGED == '1' && env.DEPLOY == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
+          cat > /tmp/want.py <<'PY'
+          import sys, yaml
+          d = yaml.safe_load(open(sys.argv[1])) or {}
+          on = d.get('on', d.get(True))
+          ok = isinstance(on, dict) and 'workflow_dispatch' in on and isinstance(on.get('push'), dict) and 'beta' in (on['push'].get('branches') or [])
+          print('true' if ok else 'false')
+          PY
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f")
+            [ "$name" = beta-automerge.yml ] && continue
+            ok=$(python3 /tmp/want.py "$f" 2>/dev/null || echo false)
+            if [ "$ok" = true ]; then
+              echo "starting $name on beta"
+              gh workflow run "$name" --repo "${{ github.repository }}" --ref beta || echo "::warning::could not start $name"
+            fi
+          done
