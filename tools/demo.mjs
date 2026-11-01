@@ -11,6 +11,8 @@ const root = path.resolve(import.meta.dirname, '..');
 const out = path.join(root, 'dist');
 fs.mkdirSync(out, { recursive: true });
 for (const f of ['hawkes-net.mjs', 'hawkes-net-core.mjs']) fs.copyFileSync(path.join(root, f), path.join(out, f));
+// Studio's playtest bot for the page (window.hawkesPlaytest: smoke and two-players).
+fs.copyFileSync(path.join(root, 'example', 'net-playtest.mjs'), path.join(out, 'net-playtest.mjs'));
 const html = fs.readFileSync(path.join(root, 'example', 'index.html'), 'utf8');
 if (!html.includes("from '../hawkes-net.mjs'")) throw new Error('example/index.html changed: update tools/demo.mjs');
 fs.writeFileSync(path.join(out, 'index.html'), html.replace("from '../hawkes-net.mjs'", "from './hawkes-net.mjs'"));
