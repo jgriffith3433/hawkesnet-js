@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hawkes Net demo</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e1116; color: #e8eaed; font: 14px system-ui, sans-serif; overflow: hidden; }
+  canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+  #hud { position: fixed; left: 12px; top: 12px; background: rgba(0,0,0,.55); padding: 8px 12px; border-radius: 8px; line-height: 1.5; }
+  #hud b { color: #9fe870; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">Hawkes Net · <span id="status">connecting…</span> · <span id="count">1 here</span><br>Move the mouse (or drag) · open this page twice<br><small id="net"></small></div>
+<script type="module">
+  // The SDK from this folder (npm: import { lobby } from '@hawkesgen/net'). ?net= another Hawkes Net (an origin);
+  // ?project= your project. On a Studio beta site the page names beta Hawkes Net (window.HAWKES_NET_ENDPOINT).
+  import { lobby, VERSION } from '../hawkes-net.mjs';
+  const q = new URLSearchParams(location.search);
+  const endpoint = q.get('net') || undefined;
+  document.getElementById('net').textContent = `@hawkesgen/net ${VERSION} on ` + (endpoint || globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, '');
+  const name = 'Player ' + Math.floor(Math.random() * 900 + 100);
+  // No liveHosts: every page gets the project's free test rooms.
+  const net = lobby({ project: q.get('project') || 'netdemo', endpoint, name, transport: 'relay' });
+  net.join('js-demo');
+  const me = { x: 0.5, y: 0.5 };
+  const others = new Map();
+  net.onPose((id, s) => others.set(id, { x: s.p[0], y: s.p[1] }));
+  net.when('peer:leave', ({ peer }) => others.delete(peer.id));
+  net.when('status', ({ status }) => { document.getElementById('status').innerHTML = `<b>${status}</b> as ${name}`; });
+  const move = (e) => { me.x = e.clientX / innerWidth; me.y = e.clientY / innerHeight; };
+  addEventListener('pointermove', move);
+  addEventListener('pointerdown', move);
+  setInterval(() => net.pose([me.x, me.y, 0]), 50);
+
+  const c = document.getElementById('c'), g = c.getContext('2d');
+  const dot = (x, y, color, label) => {
+    g.fillStyle = color; g.beginPath(); g.arc(x * c.width, y * c.height, 12 * devicePixelRatio, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#e8eaed'; g.font = `${12 * devicePixelRatio}px system-ui`; g.fillText(label, x * c.width + 16 * devicePixelRatio, y * c.height + 4 * devicePixelRatio);
+  };
+  (function draw() {
+    c.width = innerWidth * devicePixelRatio; c.height = innerHeight * devicePixelRatio;
+    for (const [id, o] of others) { const p = net.peers.get(id); if (p) dot(o.x, o.y, p.color || '#7fb3ff', p.name || id); }
+    dot(me.x, me.y, '#ffd84d', name + ' (you)');
+    document.getElementById('count').textContent = `${net.peers.size || 1} here`;
+    requestAnimationFrame(draw);
+  })();
+</script>
+</body>
+</html>
