@@ -61,7 +61,7 @@
     c.width = innerWidth * devicePixelRatio; c.height = innerHeight * devicePixelRatio;
     for (const [id, o] of others) { const p = net.peers.get(id); if (p) dot(o.x, o.y, p.color || '#7fb3ff', p.name || id); }
     dot(me.x, me.y, '#ffd84d', name + ' (you)');
-    document.getElementById('count').textContent = `${net.peers.size || 1} here`;
+    document.getElementById('count').textContent = `${net.peers.size + 1} here`;
     requestAnimationFrame(draw);
   })();
 </script>
