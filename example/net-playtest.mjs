@@ -22,6 +22,7 @@
 //     botPose: (u) => [x, y, z],                          // the second player's path, u from 0 to 1 (it stops at 1)
 //     tolerance: 0.02,                                    // "the same place", in the page's units
 //     extra: async (c) => {},                             // optional more checks: c.check(name, fn), c.main, c.bot
+//     ready: () => true,                                  // optional: the page is ready to play (default: main() exists)
 //   });
 
 export function installNetPlaytest(o) {
@@ -127,11 +128,9 @@ export function installNetPlaytest(o) {
   const step = (ms) => wait(ms);
 
   async function smoke() {
-    const main = o.main();
-    if (!main) throw new Error("the page's Hawkes Net client was never made");
-    wire(main, 'main');
+    let main = o.main();
     const okConnect = await check(`Connected to ${o.where ?? 'Hawkes Net'}`, async () => {
-      const ms = await until(() => isOnline(main), 20000, () => `the room to say online (status ${main.status ?? '?'}${main.lastProblem || lastProblem ? `, last problem: ${main.lastProblem || lastProblem}` : ''})`);
+      const ms = await until(() => { main = o.main(); if (main) wire(main, 'main'); return isOnline(main); }, 20000, () => `the room to say online (${main ? `status ${main.status ?? '?'}` : "the page's client wasn't made"}${main?.lastProblem || lastProblem ? `, last problem: ${main?.lastProblem || lastProblem}` : ''})`);
       metric('joinMs', Math.round(ms)); log(`main online as ${main.id} in ${main.roomName ?? main.room ?? ''}`);
       return `${Math.round(ms)} ms`;
     });
@@ -193,13 +192,11 @@ export function installNetPlaytest(o) {
   }
 
   async function twoPlayers() {
-    const main = o.main();
-    if (!main) throw new Error("the page's Hawkes Net client was never made");
-    wire(main, 'main');
+    let main = o.main();
     const room = new URLSearchParams(location.search).get('room');
     if (!room) problem('warning', 'no ?room= on the address: playing in the shared demo room, where strangers may be');
     const okConnect = await check(`Connected to ${o.where ?? 'Hawkes Net'}`, async () => {
-      const ms = await until(() => isOnline(main), 20000, () => `the room to say online (status ${main.status ?? '?'}${main.lastProblem || lastProblem ? `, last problem: ${main.lastProblem || lastProblem}` : ''})`);
+      const ms = await until(() => { main = o.main(); if (main) wire(main, 'main'); return isOnline(main); }, 20000, () => `the room to say online (${main ? `status ${main.status ?? '?'}` : "the page's client wasn't made"}${main?.lastProblem || lastProblem ? `, last problem: ${main?.lastProblem || lastProblem}` : ''})`);
       metric('joinMs', Math.round(ms));
       return `${Math.round(ms)} ms${room ? ` in room ${room}` : ''}`;
     });
@@ -215,9 +212,12 @@ export function installNetPlaytest(o) {
     });
     if (!okMeet) return finish('lost');
     progress(0.4);
+    // Keep moving for the rest of the run: the other browser may start watching after this one has made its first moves
+    // (it found us later, or plays slower), and it must still see this player move.
+    const r = run;
+    (async () => { try { while (r === run && !r.done) await o.drive(step); } catch { /* the run ended */ } })();
     await check("The other player's moves show here", async () => {
       let first = o.shownPos(other)?.slice() ?? null;
-      await o.drive(step); // our own moves, while theirs arrive
       await until(() => { const p = o.shownPos(other); if (p && !first) first = p.slice(); return p && first && !near(p, first, tol); }, 15000, 'the other player to move on this page');
       return `now at ${fmt(o.shownPos(other))}`;
     });
@@ -256,7 +256,7 @@ export function installNetPlaytest(o) {
     },
     stop() { if (run && !run.done) finish('done'); if (bot) { try { bot.leave(); } catch { /* gone */ } bot = null; } },
     state() {
-      const ready = Boolean(o.main());
+      const ready = o.ready ? Boolean(o.ready()) : Boolean(o.main());
       if (!run) return { ready, status: 'idle' };
       if (!run.done && performance.now() - run.moved > STALL * 1000) { problem('bug', `no progress for ${STALL} s (softlock?)`); finish('stuck'); }
       return { ...run.state, ready, metrics: { ...run.metrics } };
@@ -273,7 +273,7 @@ export function installNetPlaytest(o) {
 
   const q = new URLSearchParams(location.search);
   const auto = q.get('playtest');
-  if (auto) { const go = () => (o.main() ? api.start(auto, { seed: Number(q.get('seed')) || 1 }) : setTimeout(go, 250)); go(); }
+  if (auto) { const go = () => ((o.ready ? o.ready() : o.main()) ? api.start(auto, { seed: Number(q.get('seed')) || 1 }) : setTimeout(go, 250)); go(); }
   return api;
 }
 
