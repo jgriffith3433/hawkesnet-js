@@ -9,11 +9,38 @@
   canvas { width: 100%; height: 100%; display: block; touch-action: none; }
   #hud { position: fixed; left: 12px; top: 12px; background: rgba(0,0,0,.55); padding: 8px 12px; border-radius: 8px; line-height: 1.5; }
   #hud b { color: #9fe870; }
+  #banner { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 10; max-width: min(520px, calc(100% - 24px)); padding: 8px 16px; border-radius: 999px; background: rgba(0,0,0,.7); border: 1px solid var(--c); text-align: center; line-height: 1.4; --c: #9aa1ad; }
+  #banner b { color: var(--c); }
+  #banner small { display: block; color: #9aa1ad; }
+  #banner[data-state=connecting], #banner[data-state=reconnecting] { --c: #ffd84d; }
+  #banner[data-state=online] { --c: #9fe870; }
+  #banner[data-state=offline], #banner[data-state=full] { --c: #ff7b72; }
+  #quick { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 10; max-width: 720px; background: rgba(0,0,0,.78); border-radius: 8px; padding: 8px 12px; }
+  #quick summary { cursor: pointer; font-weight: 600; }
+  #quick pre { margin: 8px 0; padding: 8px; background: #161b22; border-radius: 6px; overflow: auto; max-height: 30vh; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+  #quick button { font: inherit; padding: 4px 12px; margin-right: 6px; border-radius: 6px; border: 1px solid #3a4150; background: #1f2630; color: inherit; cursor: pointer; }
+  #quick button:disabled { opacity: .6; cursor: default; }
+  #qs-out { color: #9fe870; min-height: 1.5em; max-height: 14vh; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="hud">Hawkes Net · <span id="status">connecting…</span> · <span id="count">1 here</span><br>Move the mouse (or drag) · open this page twice<br><small id="net"></small></div>
+<div id="banner" role="status" aria-live="polite" data-state="connecting"><b>Connecting…</b><small>Reaching Hawkes Net.</small></div>
+<div id="hud">Hawkes Net · <span id="who"></span> · <span id="count">1 here</span><br>Move the mouse (or drag) · open this page twice<br><small id="net"></small></div>
+<details id="quick" open>
+<summary>Quickstart: your own player in this room, in five lines</summary>
+<p style="margin:6px 0">Paste this into any page's <code>&lt;script type="module"&gt;</code> (or use <b>Run it here</b>). Your project comes from <a href="https://net.hawkesgen.ai" style="color:#7fb3ff">net.hawkesgen.ai</a>; <code>netdemo</code> is the free test project.</p>
+<pre id="qs-code">import { lobby } from 'https://net.hawkesgen.ai/sdk/hawkes-net@1.mjs';
+
+const net = lobby({ project: 'netdemo', name: 'Ada' });
+net.when('status', ({ status }) => console.log('status:', status)); // connecting, online, reconnecting...
+net.when('peer:join', ({ peer }) => console.log(peer.name, 'joined'));
+net.on('chat', (text, from) => console.log(from.name + ':', text));
+net.when('status', ({ status }) => { if (status === 'online') net.send('chat', 'hi'); });
+net.join('quickstart');</pre>
+<button id="qs-copy" type="button">Copy</button><button id="qs-run" type="button">Run it here</button>
+<pre id="qs-out" aria-live="polite"></pre>
+</details>
 <script type="module">
   // The SDK from this folder (npm: import { lobby } from '@hawkesgen/net'). ?net= another Hawkes Net (an origin);
   // ?project= your project. On a Studio beta site the page names beta Hawkes Net (window.HAWKES_NET_ENDPOINT).
@@ -33,7 +60,39 @@
   const others = new Map();
   net.onPose((id, s) => others.set(id, { x: s.p[0], y: s.p[1] }));
   net.when('peer:leave', ({ peer }) => others.delete(peer.id));
-  net.when('status', ({ status }) => { document.getElementById('status').innerHTML = `<b>${status}</b> as ${name}`; });
+  document.getElementById('who').textContent = name;
+
+  // The banner: the connection in plain words. It is drawn only inside the SDK's events (status, joined, transport),
+  // never on a timer. `bannerLog` keeps what it said, in order, for the playtest.
+  const bannerEl = document.getElementById('banner');
+  const bannerLog = [];
+  let bannerRenders = 0, bannerEvents = 0;
+  const WORDS = {
+    off: ['Not connected', 'Not in a room yet.'],
+    connecting: ['Connecting…', 'Reaching Hawkes Net.'],
+    reconnecting: ['Connection lost. Reconnecting…', 'The game keeps going. Messages you send meanwhile are sent again once you are back.'],
+    offline: ['Offline', 'Could not reach the room. This page keeps trying.'],
+    full: ['This room is full', 'Trying the next one.'],
+  };
+  function words() {
+    const status = net.status;
+    if (status !== 'online') return [status, ...(WORDS[status] || [status, ''])];
+    const t = net.room?.transport;
+    return ['online', 'Connected', t === 'relay' ? 'Through a Hawkes relay: it carries every message, in order.' : t === 'p2p' ? 'Straight to the other players (peer to peer).' : 'In the room.'];
+  }
+  function renderBanner(why) {
+    bannerEvents++;
+    const [state, head, detail] = words();
+    const text = `${head}. ${detail}`;
+    if (bannerEl.dataset.state === state && bannerEl.textContent === text) return;
+    bannerEl.dataset.state = state;
+    bannerEl.innerHTML = `<b></b><small></small>`;
+    bannerEl.firstChild.textContent = head; bannerEl.lastChild.textContent = detail;
+    bannerRenders++;
+    bannerLog.push({ state, head, detail, why });
+  }
+  for (const ev of ['status', 'joined', 'transport', 'left']) net.when(ev, () => renderBanner(ev));
+  renderBanner('start');
   const move = (e) => { me.x = e.clientX / innerWidth; me.y = e.clientY / innerHeight; };
   addEventListener('pointermove', move);
   addEventListener('pointerdown', move);
@@ -55,6 +114,42 @@
       const readable = (n) => labelRects.length >= n && labelRects.every((l) => l.x >= 0 && l.y >= 0 && l.x + l.w <= canvasSize[0] && l.y + l.h <= canvasSize[1]) &&
         labelRects.every((a, i) => labelRects.every((b, j) => j <= i || !hit(a, b)));
       const meet = async (x, y) => { pointer(x, y); bot.pose([x, y, 0], 0); await until(() => { const o = others.get(bot.id); return o && Math.hypot(o.x - x, o.y - y) < 0.02 && Math.hypot(me.x - x, me.y - y) < 0.02; }, 5000, `both players to be at ${x}, ${y}`); await wait(200); };
+      const banner = () => ({ state: bannerEl.dataset.state, text: bannerEl.textContent });
+      await check('The banner says in plain words that you are connected, and through what', async () => {
+        await until(() => banner().state === 'online', 5000, () => `the banner to say connected (it says "${banner().text}")`);
+        if (!/Connected/.test(banner().text) || !/relay/i.test(banner().text)) throw new Error(`the banner should say Connected and name the relay, it says "${banner().text}"`);
+        return banner().text;
+      });
+      await check('The banner went from connecting to connected', async () => {
+        const seen = bannerLog.map((b) => b.state);
+        const a = seen.indexOf('connecting'), b = seen.indexOf('online');
+        if (a < 0 || b < a) throw new Error(`expected connecting then online, the banner showed: ${seen.join(', ')}`);
+        return seen.join(' > ');
+      });
+      await check('Losing the connection shows reconnecting, then connected again', async () => {
+        const ws = net.room?.ws; // setup shortcut: drop this page's socket, as a network blip would
+        if (!ws) throw new Error('no socket to drop');
+        ws.close(4000, 'playtest');
+        await until(() => banner().state === 'reconnecting', 5000, () => `the banner to say reconnecting (it says "${banner().text}")`);
+        const lost = banner().text;
+        await until(() => banner().state === 'online', 25000, () => `the banner to say connected again (it says "${banner().text}")`);
+        await until(() => net.room && net.room.peers.has(bot.id) , 15000, 'the second player to be back in view');
+        return lost;
+      });
+      await check('The banner changes only when the SDK reports a change (events, not a timer)', async () => {
+        const before = bannerRenders;
+        await wait(1500);
+        if (bannerRenders !== before) throw new Error('the banner redrew with no event');
+        if (bannerRenders !== bannerLog.length) throw new Error('banner log and renders disagree');
+        return `${bannerRenders} changes: ${bannerLog.map((b) => b.why).join(', ')}`;
+      });
+      await check('The quickstart on the page runs as pasted', async () => {
+        const run = document.getElementById('qs-run'), out = document.getElementById('qs-out');
+        if (!document.getElementById('qs-code').textContent.includes('lobby(')) throw new Error('no quickstart code on the page');
+        run.click();
+        await until(() => /status: online/.test(out.textContent), 20000, () => `the quickstart to reach online (its output: "${out.textContent.trim()}")`);
+        return out.textContent.trim().replace(/\n/g, ' / ');
+      });
       await check('Two players on the same spot show two readable labels', async () => {
         await meet(0.5, 0.5);
         await until(() => readable(2), 3000, () => `two labels that do not overlap (${JSON.stringify(labelRects.map((l) => [l.label, Math.round(l.x), Math.round(l.y)]))})`);
@@ -68,6 +163,21 @@
         return 'corners and sides';
       });
     },
+  });
+
+  // Quickstart: the code shown is the code run. Only its import address changes, to this page's own copy of the SDK.
+  const qsCode = document.getElementById('qs-code'), qsOut = document.getElementById('qs-out'), qsRun = document.getElementById('qs-run');
+  document.getElementById('qs-copy').addEventListener('click', async (e) => {
+    try { await navigator.clipboard.writeText(qsCode.textContent); e.target.textContent = 'Copied'; } catch { getSelection().selectAllChildren(qsCode); e.target.textContent = 'Selected: press Ctrl+C'; }
+  });
+  qsRun.addEventListener('click', async () => {
+    qsRun.disabled = true; qsRun.textContent = 'Running (reload to stop)';
+    const sdk = new URL('../hawkes-net.mjs', location.href).href;
+    const src = qsCode.textContent.replace('https://net.hawkesgen.ai/sdk/hawkes-net@1.mjs', sdk);
+    const log = console.log;
+    console.log = (...a) => { log(...a); qsOut.textContent += a.join(' ') + '\n'; };
+    try { await import(URL.createObjectURL(new Blob([src], { type: 'text/javascript' }))); }
+    catch (e) { qsOut.textContent += 'Error: ' + (e?.message || e) + '\n'; }
   });
 
   const c = document.getElementById('c'), g = c.getContext('2d');
