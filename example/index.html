@@ -278,7 +278,7 @@ net.join('quickstart');</pre>
         });
         const rows = () => [...document.querySelectorAll('#plist li')].map((li) => ({ name: li.querySelector('.nm').textContent, color: li.dataset.color, kind: li.dataset.kind }));
         await check('Each player has a distinct colour and a short trail', async () => {
-          follow(circle(0));
+          follow(at(circle(0)));
           await until(() => shownNear(circle(0)), 5000, 'the other player to reach the start of its circle');
           follow(circle);
           let k = 0; // this page's player moves by real pointer input too
