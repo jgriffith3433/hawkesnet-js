@@ -29,6 +29,7 @@
   const net = lobby({ ...opts, name });
   net.join('js-demo');
   const me = { x: 0.5, y: 0.5 };
+  let labelRects = [], canvasSize = [0, 0];
   const others = new Map();
   net.onPose((id, s) => others.set(id, { x: s.p[0], y: s.p[1] }));
   net.when('peer:leave', ({ peer }) => others.delete(peer.id));
@@ -50,17 +51,62 @@
     shownPos: (id) => { const o = others.get(id); return o ? [o.x, o.y, 0] : null; },
     botPose: (u) => [0.25 + 0.5 * u, 0.75, 0],
     tolerance: 0.02,
+    extra: async ({ check, bot, until, wait }) => {
+      const readable = (n) => labelRects.length >= n && labelRects.every((l) => l.x >= 0 && l.y >= 0 && l.x + l.w <= canvasSize[0] && l.y + l.h <= canvasSize[1]) &&
+        labelRects.every((a, i) => labelRects.every((b, j) => j <= i || !hit(a, b)));
+      const meet = async (x, y) => { pointer(x, y); bot.pose([x, y, 0], 0); await until(() => { const o = others.get(bot.id); return o && Math.hypot(o.x - x, o.y - y) < 0.02 && Math.hypot(me.x - x, me.y - y) < 0.02; }, 5000, `both players to be at ${x}, ${y}`); await wait(200); };
+      await check('Two players on the same spot show two readable labels', async () => {
+        await meet(0.5, 0.5);
+        await until(() => readable(2), 3000, () => `two labels that do not overlap (${JSON.stringify(labelRects.map((l) => [l.label, Math.round(l.x), Math.round(l.y)]))})`);
+        return labelRects.map((l) => l.label).join(' / ');
+      });
+      await check('Labels stay inside the canvas at every edge', async () => {
+        for (const [x, y] of [[0, 0], [1, 0], [1, 1], [0, 1], [0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]]) {
+          await meet(x, y);
+          await until(() => readable(2), 3000, () => `both labels inside the canvas and apart at ${x}, ${y} (${JSON.stringify(labelRects.map((l) => [Math.round(l.x), Math.round(l.y), Math.round(l.w)]))} in ${canvasSize})`);
+        }
+        return 'corners and sides';
+      });
+    },
   });
 
   const c = document.getElementById('c'), g = c.getContext('2d');
-  const dot = (x, y, color, label) => {
-    g.fillStyle = color; g.beginPath(); g.arc(x * c.width, y * c.height, 12 * devicePixelRatio, 0, Math.PI * 2); g.fill();
-    g.fillStyle = '#e8eaed'; g.font = `${12 * devicePixelRatio}px system-ui`; g.fillText(label, x * c.width + 16 * devicePixelRatio, y * c.height + 4 * devicePixelRatio);
-  };
+  // Labels: each dot's name goes beside it, moved to the first free spot (right, left, below, above, then rows further out)
+  // so two nearby dots, or two on the same spot, never write over each other, and clamped to stay inside the canvas.
+  const hit = (a, b, pad = 0) => a.x < b.x + b.w + pad && b.x < a.x + a.w + pad && a.y < b.y + b.h + pad && b.y < a.y + a.h + pad;
+  function layoutLabels(dots, W, H, d) {
+    const R = 12 * d, gap = 4 * d, h = 16 * d, pad = 2 * d, placed = [];
+    g.font = `${12 * d}px system-ui`;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, Math.max(lo, hi)));
+    const discs = dots.map((o) => ({ x: o.cx - R, y: o.cy - R, w: 2 * R, h: 2 * R }));
+    return dots.map((o, i) => {
+      const w = g.measureText(o.label).width + 8 * d, row = h + pad;
+      const cands = [[R + gap, -h / 2], [-R - gap - w, -h / 2], [-w / 2, R + gap], [-w / 2, -R - gap - h], [R + gap, R], [-R - gap - w, R], [R + gap, -R - h], [-R - gap - w, -R - h]];
+      for (let k = 1; k <= dots.length + 3; k++) for (const sgn of [1, -1]) { cands.push([R + gap, sgn * k * row - h / 2], [-R - gap - w, sgn * k * row - h / 2]); }
+      let pick = null;
+      for (const [dx, dy] of cands) {
+        const r = { x: clamp(o.cx + dx, 0, W - w), y: clamp(o.cy + dy, 0, H - h), w, h };
+        if (!placed.some((p) => hit(r, p, pad)) && !discs.some((q, j) => j !== i && hit(r, q))) { pick = r; break; }
+      }
+      pick ||= { x: clamp(o.cx + R + gap, 0, W - w), y: clamp(o.cy - h / 2, 0, H - h), w, h };
+      placed.push(pick);
+      return { ...pick, label: o.label };
+    });
+  }
   (function draw() {
-    c.width = innerWidth * devicePixelRatio; c.height = innerHeight * devicePixelRatio;
-    for (const [id, o] of others) { const p = net.peers.get(id); if (p) dot(o.x, o.y, p.color || '#7fb3ff', p.name || id); }
-    dot(me.x, me.y, '#ffd84d', name + ' (you)');
+    const d = devicePixelRatio;
+    c.width = innerWidth * d; c.height = innerHeight * d;
+    const dots = [{ cx: me.x * c.width, cy: me.y * c.height, color: '#ffd84d', label: name + ' (you)' }]; // you first: your label gets the best spot
+    for (const [id, o] of others) { const p = net.peers.get(id); if (p) dots.push({ cx: o.x * c.width, cy: o.y * c.height, color: p.color || '#7fb3ff', label: p.name || id }); }
+    for (const o of dots) { g.fillStyle = o.color; g.beginPath(); g.arc(o.cx, o.cy, 12 * d, 0, Math.PI * 2); g.fill(); }
+    const labels = layoutLabels(dots, c.width, c.height, d);
+    g.textBaseline = 'middle';
+    for (const l of labels) {
+      g.fillStyle = 'rgba(14,17,22,.78)'; g.beginPath(); g.roundRect(l.x, l.y, l.w, l.h, 4 * d); g.fill();
+      g.fillStyle = '#e8eaed'; g.font = `${12 * d}px system-ui`; g.fillText(l.label, l.x + 4 * d, l.y + l.h / 2);
+    }
+    labelRects = labels.map((l) => ({ label: l.label, x: l.x, y: l.y, w: l.w, h: l.h }));
+    canvasSize = [c.width, c.height];
     document.getElementById('count').textContent = `${net.peers.size + 1} here`;
     requestAnimationFrame(draw);
   })();
