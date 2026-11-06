@@ -26,7 +26,7 @@
 <body>
 <canvas id="c"></canvas>
 <div id="banner" role="status" aria-live="polite" data-state="connecting"><b>Connecting…</b><small>Reaching Hawkes Net.</small></div>
-<div id="hud">Hawkes Net · <span id="who"></span> · <span id="count">1 here</span><br>Move the mouse (or drag) · open this page twice<br><small id="net"></small></div>
+<div id="hud">Hawkes Net · <span id="who"></span> · <span id="count">1 here</span><br>Move the mouse (or drag) · open this page twice<br><small id="net"></small><br><small id="glide"></small></div>
 <details id="quick" open>
 <summary>Quickstart: your own player in this room, in five lines</summary>
 <p style="margin:6px 0">Paste this into any page's <code>&lt;script type="module"&gt;</code> (or use <b>Run it here</b>). Your project comes from <a href="https://net.hawkesgen.ai" style="color:#7fb3ff">net.hawkesgen.ai</a>; <code>netdemo</code> is the free test project.</p>
@@ -44,7 +44,7 @@ net.join('quickstart');</pre>
 <script type="module">
   // The SDK from this folder (npm: import { lobby } from '@hawkesgen/net'). ?net= another Hawkes Net (an origin);
   // ?project= your project. On a Studio beta site the page names beta Hawkes Net (window.HAWKES_NET_ENDPOINT).
-  import { lobby, VERSION } from '../hawkes-net.mjs';
+  import { lobby, VERSION, Track } from '../hawkes-net.mjs';
   import { installNetPlaytest } from './net-playtest.mjs';
   const q = new URLSearchParams(location.search);
   const endpoint = q.get('net') || undefined;
@@ -57,9 +57,38 @@ net.join('quickstart');</pre>
   net.join('js-demo');
   const me = { x: 0.5, y: 0.5 };
   let labelRects = [], canvasSize = [0, 0];
+  // Other players glide. Each pose that arrives goes into a Track (the SDK's snapshot buffer, on the room's shared clock),
+  // and every frame draws where the Track says that player was a moment ago: just behind the newest pose, by the link's
+  // measured delay and jitter. So a dot moves every frame, instead of jumping once per packet, and a late or bunched packet
+  // stretches the playback a little rather than making the dot leap. `others` is where this frame drew each player.
+  // ?lag=150 holds every incoming pose back that long, as a slower network would; ?smooth=0 draws the newest pose as it
+  // lands (the old snapping), to compare.
+  const smooth = q.get('smooth') !== '0';
+  const glide = { lagMs: Math.max(0, Number(q.get('lag')) || 0), packets: 0, watch: null };
   const others = new Map();
-  net.onPose((id, s) => others.set(id, { x: s.p[0], y: s.p[1] }));
-  net.when('peer:leave', ({ peer }) => others.delete(peer.id));
+  const tracks = new Map();
+  // The lobby's room can change (a rejoin, a new shard): the link figures are always the current room's.
+  const links = { note: (from, at) => net.room?.links?.note(from, at), get: (from) => net.room?.links?.get(from) };
+  const FOLLOW_MS = 60;
+  let roomGen = 0, lastFrame = performance.now();
+  const land = (gen, id, p, at) => {
+    if (gen !== roomGen || !net.peers.has(id)) return;
+    let t = tracks.get(id);
+    if (!t) tracks.set(id, (t = new Track({ pos: [0, 1, 2] }, { clock: () => net.now(), links })));
+    t.push(at, p, id);
+    glide.packets++;
+  };
+  net.onPose((id, s, at) => {
+    const p = [s.p[0], s.p[1], s.p[2]], gen = roomGen;
+    if (glide.lagMs) setTimeout(() => land(gen, id, p, at), glide.lagMs); else land(gen, id, p, at);
+  });
+  net.when('peer:leave', ({ peer }) => { tracks.delete(peer.id); others.delete(peer.id); });
+  net.when('joined', () => { roomGen++; tracks.clear(); others.clear(); }); // a new room has its own clock
+  const setLag = (ms) => {
+    glide.lagMs = ms;
+    document.getElementById('glide').textContent = (smooth ? 'Other players glide (interpolated)' : 'Other players snap to each packet (?smooth=0)') + (ms ? ` · +${ms} ms simulated latency` : '');
+  };
+  setLag(glide.lagMs);
   document.getElementById('who').textContent = name;
 
   // The banner: the connection in plain words. It is drawn only inside the SDK's events (status, joined, transport),
@@ -110,58 +139,118 @@ net.join('quickstart');</pre>
     shownPos: (id) => { const o = others.get(id); return o ? [o.x, o.y, 0] : null; },
     botPose: (u) => [0.25 + 0.5 * u, 0.75, 0],
     tolerance: 0.02,
-    extra: async ({ check, bot, until, wait }) => {
+    extra: async ({ check, bot, until, wait, metric }) => {
       const readable = (n) => labelRects.length >= n && labelRects.every((l) => l.x >= 0 && l.y >= 0 && l.x + l.w <= canvasSize[0] && l.y + l.h <= canvasSize[1]) &&
         labelRects.every((a, i) => labelRects.every((b, j) => j <= i || !hit(a, b)));
-      const meet = async (x, y) => { pointer(x, y); bot.pose([x, y, 0], 0); await until(() => { const o = others.get(bot.id); return o && Math.hypot(o.x - x, o.y - y) < 0.02 && Math.hypot(me.x - x, me.y - y) < 0.02; }, 5000, `both players to be at ${x}, ${y}`); await wait(200); };
+      const meet = async (x, y) => { pointer(x, y); follow(at([x, y, 0])); await until(() => { const o = others.get(bot.id); return o && Math.hypot(o.x - x, o.y - y) < 0.02 && Math.hypot(me.x - x, me.y - y) < 0.02; }, 5000, `both players to be at ${x}, ${y}`); await wait(200); };
       const banner = () => ({ state: bannerEl.dataset.state, text: bannerEl.textContent });
-      await check('The banner says in plain words that you are connected, and through what', async () => {
-        await until(() => banner().state === 'online', 5000, () => `the banner to say connected (it says "${banner().text}")`);
-        if (!/Connected/.test(banner().text) || !/relay/i.test(banner().text)) throw new Error(`the banner should say Connected and name the relay, it says "${banner().text}"`);
-        return banner().text;
-      });
-      await check('The banner went from connecting to connected', async () => {
-        const seen = bannerLog.map((b) => b.state);
-        const a = seen.indexOf('connecting'), b = seen.indexOf('online');
-        if (a < 0 || b < a) throw new Error(`expected connecting then online, the banner showed: ${seen.join(', ')}`);
-        return seen.join(' > ');
-      });
-      await check('Losing the connection shows reconnecting, then connected again', async () => {
-        const ws = net.room?.ws; // setup shortcut: drop this page's socket, as a network blip would
-        if (!ws) throw new Error('no socket to drop');
-        ws.close(4000, 'playtest');
-        await until(() => banner().state === 'reconnecting', 5000, () => `the banner to say reconnecting (it says "${banner().text}")`);
-        const lost = banner().text;
-        await until(() => banner().state === 'online', 25000, () => `the banner to say connected again (it says "${banner().text}")`);
-        await until(() => net.room && net.room.peers.has(bot.id) , 15000, 'the second player to be back in view');
-        return lost;
-      });
-      await check('The banner changes only when the SDK reports a change (events, not a timer)', async () => {
-        const before = bannerRenders;
-        await wait(1500);
-        if (bannerRenders !== before) throw new Error('the banner redrew with no event');
-        if (bannerRenders !== bannerLog.length) throw new Error('banner log and renders disagree');
-        return `${bannerRenders} changes: ${bannerLog.map((b) => b.why).join(', ')}`;
-      });
-      await check('The quickstart on the page runs as pasted', async () => {
-        const run = document.getElementById('qs-run'), out = document.getElementById('qs-out');
-        if (!document.getElementById('qs-code').textContent.includes('lobby(')) throw new Error('no quickstart code on the page');
-        run.click();
-        await until(() => /status: online/.test(out.textContent), 20000, () => `the quickstart to reach online (its output: "${out.textContent.trim()}")`);
-        return out.textContent.trim().replace(/\n/g, ' / ');
-      });
-      await check('Two players on the same spot show two readable labels', async () => {
-        await meet(0.5, 0.5);
-        await until(() => readable(2), 3000, () => `two labels that do not overlap (${JSON.stringify(labelRects.map((l) => [l.label, Math.round(l.x), Math.round(l.y)]))})`);
-        return labelRects.map((l) => l.label).join(' / ');
-      });
-      await check('Labels stay inside the canvas at every edge', async () => {
-        for (const [x, y] of [[0, 0], [1, 0], [1, 1], [0, 1], [0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]]) {
-          await meet(x, y);
-          await until(() => readable(2), 3000, () => `both labels inside the canvas and apart at ${x}, ${y} (${JSON.stringify(labelRects.map((l) => [Math.round(l.x), Math.round(l.y), Math.round(l.w)]))} in ${canvasSize})`);
-        }
-        return 'corners and sides';
-      });
+      // Gliding: the second player keeps sending its pose every 50 ms (as this page sends its own, moving or not) along
+      // `path`, while this page logs, every frame, where it drew that player and how many poses had landed by then.
+      const SPEED = 0.4; // the path's speed, in screen widths a second
+      let path = null, t0 = 0;
+      const follow = (p) => { path = p; t0 = performance.now(); };
+      const feed = setInterval(() => { try { if (path) bot.pose(path((performance.now() - t0) / 1000), 0); } catch { /* left */ } }, 50);
+      const shownNear = (p, tol = 0.01) => { const o = others.get(bot.id); return o && Math.hypot(o.x - p[0], o.y - p[1]) < tol; };
+      const record = async (ms) => {
+        const w = (glide.watch = { id: bot.id, frames: [] });
+        try { await wait(ms); } finally { glide.watch = null; }
+        const f = w.frames;
+        const s = f.slice(1).map((b, i) => ({ d: Math.hypot(b.x - f[i].x, b.y - f[i].y), snap: Math.hypot(b.nx - f[i].nx, b.ny - f[i].ny), dt: (b.t - f[i].t) / 1000, newPacket: b.packets !== f[i].packets }));
+        const go = s.findIndex((x) => x.d > 1e-5); // the dot shows the move a moment after it starts: judge from its first step
+        return go < 0 ? s : s.slice(go);
+      };
+      const r3 = (n) => Math.round(n * 1000) / 1000;
+      const circle = (t) => { const a = (t * SPEED) / 0.2; return [0.5 + 0.2 * Math.cos(a), 0.5 + 0.2 * Math.sin(a), 0]; };
+      const sweep = (t) => { const u = Math.abs((((t * SPEED) / 0.6) % 2) - 1); return [0.2 + 0.6 * u, 0.4, 0]; }; // turns at both ends
+      const at = (p) => () => p;
+      try {
+        await check("The other player's dot moves every frame, not once per packet", async () => {
+          follow(at(circle(0)));
+          await until(() => shownNear(circle(0)), 5000, 'the other player to reach the start of its circle');
+          follow(circle);
+          const s = await record(3500);
+          const secs = s.reduce((a, b) => a + b.dt, 0), fps = s.length / Math.max(0.001, secs);
+          const moved = s.filter((x) => x.d > 1e-5).length, between = s.filter((x) => x.d > 1e-5 && !x.newPacket).length;
+          const packets = s.filter((x) => x.newPacket).length, snapMoves = s.filter((x) => x.snap > 1e-5).length;
+          metric('glideFps', Math.round(fps)); metric('glideMovedFramesPct', Math.round((100 * moved) / Math.max(1, s.length)));
+          metric('glideFramesBetweenPackets', between); metric('glideFramesWithAPacket', packets);
+          const said = `${moved} of ${s.length} frames moved (${Math.round(fps)} fps), ${between} of them with no new pose; a dot drawn at each pose would have moved in ${snapMoves}`;
+          if (s.length < 20) throw new Error(`only ${s.length} frames drawn in 3.5 s`);
+          if (moved < 0.9 * s.length) throw new Error(`the dot stood still in ${s.length - moved} of ${s.length} frames while the player moved: ${said}`);
+          if (fps > (packets / secs) * 1.4 && between < 0.2 * s.length) throw new Error(`the dot only moved when a pose landed: ${said}`);
+          return said;
+        });
+        await check("With 150 ms of simulated latency the other player's dot glides and does not teleport", async () => {
+          follow(at(sweep(0)));
+          await until(() => shownNear(sweep(0)), 5000, 'the other player to reach the start of its path');
+          setLag(150); // setup shortcut: every pose this page receives is held back 150 ms more, as a slower network would
+          let s, transit;
+          try {
+            follow(sweep);
+            s = await record(5000);
+            transit = net.room?.links?.get(bot.id)?.transit;
+          } finally { setLag(0); }
+          const allowed = (x) => SPEED * x.dt * 2.5 + 0.004; // a teleport: a step over 2.5x the player's own speed (+ ~5 px)
+          const jumps = s.filter((x) => x.d > allowed(x));
+          const biggest = s.reduce((a, x) => (x.d > a.d ? x : a), { d: 0, dt: 0 });
+          const snapBiggest = s.reduce((a, x) => Math.max(a, x.snap), 0);
+          const moved = s.filter((x) => x.d > 1e-5).length;
+          metric('lagTeleports', jumps.length); metric('lagBiggestStep', r3(biggest.d)); metric('lagSnapBiggestStep', r3(snapBiggest));
+          if (Number.isFinite(transit)) metric('lagLinkDelayMs', Math.round(transit));
+          const said = `biggest step ${r3(biggest.d)} in ${Math.round(biggest.dt * 1000)} ms over ${s.length} frames (the player moves ${r3(SPEED / 60)} in 1/60 s; drawn at each pose it would jump ${r3(snapBiggest)})${Number.isFinite(transit) ? `, link delay ${Math.round(transit)} ms` : ''}`;
+          if (s.length < 20) throw new Error(`only ${s.length} frames drawn in 5 s`);
+          if (jumps.length) throw new Error(`${jumps.length} teleport(s), the worst ${r3(jumps.reduce((a, x) => Math.max(a, x.d), 0))} in one frame: ${said}`);
+          if (moved < 0.9 * s.length) throw new Error(`the dot stood still in ${s.length - moved} of ${s.length} frames while the player moved: ${said}`);
+          return said;
+        });
+        await check('The banner says in plain words that you are connected, and through what', async () => {
+          await until(() => banner().state === 'online', 5000, () => `the banner to say connected (it says "${banner().text}")`);
+          if (!/Connected/.test(banner().text) || !/relay/i.test(banner().text)) throw new Error(`the banner should say Connected and name the relay, it says "${banner().text}"`);
+          return banner().text;
+        });
+        await check('The banner went from connecting to connected', async () => {
+          const seen = bannerLog.map((b) => b.state);
+          const a = seen.indexOf('connecting'), b = seen.indexOf('online');
+          if (a < 0 || b < a) throw new Error(`expected connecting then online, the banner showed: ${seen.join(', ')}`);
+          return seen.join(' > ');
+        });
+        await check('Losing the connection shows reconnecting, then connected again', async () => {
+          const ws = net.room?.ws; // setup shortcut: drop this page's socket, as a network blip would
+          if (!ws) throw new Error('no socket to drop');
+          ws.close(4000, 'playtest');
+          await until(() => banner().state === 'reconnecting', 5000, () => `the banner to say reconnecting (it says "${banner().text}")`);
+          const lost = banner().text;
+          await until(() => banner().state === 'online', 25000, () => `the banner to say connected again (it says "${banner().text}")`);
+          await until(() => net.room && net.room.peers.has(bot.id) , 15000, 'the second player to be back in view');
+          return lost;
+        });
+        await check('The banner changes only when the SDK reports a change (events, not a timer)', async () => {
+          const before = bannerRenders;
+          await wait(1500);
+          if (bannerRenders !== before) throw new Error('the banner redrew with no event');
+          if (bannerRenders !== bannerLog.length) throw new Error('banner log and renders disagree');
+          return `${bannerRenders} changes: ${bannerLog.map((b) => b.why).join(', ')}`;
+        });
+        await check('The quickstart on the page runs as pasted', async () => {
+          const run = document.getElementById('qs-run'), out = document.getElementById('qs-out');
+          if (!document.getElementById('qs-code').textContent.includes('lobby(')) throw new Error('no quickstart code on the page');
+          run.click();
+          await until(() => /status: online/.test(out.textContent), 20000, () => `the quickstart to reach online (its output: "${out.textContent.trim()}")`);
+          return out.textContent.trim().replace(/\n/g, ' / ');
+        });
+        await check('Two players on the same spot show two readable labels', async () => {
+          await meet(0.5, 0.5);
+          await until(() => readable(2), 3000, () => `two labels that do not overlap (${JSON.stringify(labelRects.map((l) => [l.label, Math.round(l.x), Math.round(l.y)]))})`);
+          return labelRects.map((l) => l.label).join(' / ');
+        });
+        await check('Labels stay inside the canvas at every edge', async () => {
+          for (const [x, y] of [[0, 0], [1, 0], [1, 1], [0, 1], [0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]]) {
+            await meet(x, y);
+            await until(() => readable(2), 3000, () => `both labels inside the canvas and apart at ${x}, ${y} (${JSON.stringify(labelRects.map((l) => [Math.round(l.x), Math.round(l.y), Math.round(l.w)]))} in ${canvasSize})`);
+          }
+          return 'corners and sides';
+        });
+      } finally { clearInterval(feed); }
     },
   });
 
@@ -207,7 +296,25 @@ net.join('quickstart');</pre>
     const d = devicePixelRatio;
     c.width = innerWidth * d; c.height = innerHeight * d;
     const dots = [{ cx: me.x * c.width, cy: me.y * c.height, color: '#ffd84d', label: name + ' (you)' }]; // you first: your label gets the best spot
-    for (const [id, o] of others) { const p = net.peers.get(id); if (p) dots.push({ cx: o.x * c.width, cy: o.y * c.height, color: p.color || '#7fb3ff', label: p.name || id }); }
+    // Each dot follows its Track's point with a short ease (FOLLOW_MS): when the network hiccups and the Track corrects
+    // its guess, the dot slides there over a few frames instead of jumping.
+    const tNow = performance.now(), ease = 1 - Math.exp(-(tNow - lastFrame) / FOLLOW_MS);
+    lastFrame = tNow;
+    for (const [id, t] of tracks) {
+      const p = net.peers.get(id);
+      if (!p) { tracks.delete(id); others.delete(id); continue; }
+      const v = smooth ? t.sample() : t.newest?.v;
+      if (!v) continue;
+      let o = others.get(id);
+      if (!o || !smooth) others.set(id, (o = { x: v[0], y: v[1] }));
+      else { o.x += (v[0] - o.x) * ease; o.y += (v[1] - o.y) * ease; }
+      dots.push({ cx: o.x * c.width, cy: o.y * c.height, color: p.color || '#7fb3ff', label: p.name || id });
+    }
+    // The playtest's frame log for one player: where each frame drew it, when, and how many poses had landed by then.
+    if (glide.watch) {
+      const o = others.get(glide.watch.id), n = tracks.get(glide.watch.id)?.newest?.v;
+      if (o && n) glide.watch.frames.push({ t: performance.now(), x: o.x, y: o.y, nx: n[0], ny: n[1], packets: glide.packets });
+    }
     for (const o of dots) { g.fillStyle = o.color; g.beginPath(); g.arc(o.cx, o.cy, 12 * d, 0, Math.PI * 2); g.fill(); }
     const labels = layoutLabels(dots, c.width, c.height, d);
     g.textBaseline = 'middle';
