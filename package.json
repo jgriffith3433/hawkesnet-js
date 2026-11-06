@@ -12,7 +12,8 @@
     },
     "./core": "./hawkes-net-core.mjs"
   },
-  "files": ["hawkes-net.mjs", "hawkes-net-core.mjs", "hawkes-net.d.ts", "README.md", "LICENSE"],
+  "files": ["hawkes-net.mjs", "hawkes-net-core.mjs", "hawkes-net.d.ts", "README.md", "LICENSE", "recipes"],
+  "scripts": { "test": "node --test test/*.test.mjs" },
   "sideEffects": false,
   "license": "MIT",
   "homepage": "https://net.hawkesgen.ai",

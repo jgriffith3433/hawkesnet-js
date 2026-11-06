@@ -18,6 +18,34 @@ net.pose([x, y, z], yaw);                                                // your
 net.onPose((id, state) => moveAvatar(id, state.p, state.y));
 ```
 
+## Recipes
+
+Four things most games need, each a short file you can paste, run live on the demo site's **Recipes** page and tested
+by `npm test` (the tests run the files exactly as written):
+
+| Recipe | What it shows | Code |
+|---|---|---|
+| Chat | `send` and `on`, joins and leaves | [`recipes/chat.mjs`](recipes/chat.mjs) |
+| Cursors | `pose` and `onPose`: every player's pointer, seen by the others | [`recipes/cursors.mjs`](recipes/cursors.mjs) |
+| Shared state | `sync.state` and `sync.action`: one score, the host holds the truth | [`recipes/shared-state.mjs`](recipes/shared-state.mjs) |
+| A room with a password | a room name made from the password, and what that does and doesn't protect | [`recipes/password-room.mjs`](recipes/password-room.mjs) |
+
+Chat in full:
+
+```js
+import { lobby } from '@hawkesgen/net';
+
+const net = lobby({ project: 'netdemo', name: 'Ada' }); // netdemo is the free test project
+net.on('chat', (text, from) => console.log(`${from.name}: ${text}`));
+net.join('recipe-chat');
+net.when('status', ({ status }) => { if (status === 'online') net.send('chat', 'hi, anyone here?'); });
+```
+
+A room with a password keeps friends together; it does not keep out someone who learns the room's name. For real access
+control your server hands out tickets (see `ticket` in the types).
+
+## More
+
 - **Projects and tickets:** make an account and a project at [net.hawkesgen.ai](https://net.hawkesgen.ai). A page on one
   of your project's sites joins with no key; servers, bots and tests use your API key.
 - **The standard layer:** `lobby({ project, liveHosts })` keeps a shared room per area, with live and test rooms, shards
