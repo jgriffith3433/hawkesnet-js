@@ -14,8 +14,8 @@ for (const f of ['hawkes-net.mjs', 'hawkes-net-core.mjs']) fs.copyFileSync(path.
 // Studio's playtest bot for the page (window.hawkesPlaytest: smoke and two-players).
 fs.copyFileSync(path.join(root, 'example', 'net-playtest.mjs'), path.join(out, 'net-playtest.mjs'));
 const html = fs.readFileSync(path.join(root, 'example', 'index.html'), 'utf8');
-if (!html.includes("from '../hawkes-net.mjs'")) throw new Error('example/index.html changed: update tools/demo.mjs');
-fs.writeFileSync(path.join(out, 'index.html'), html.replace("from '../hawkes-net.mjs'", "from './hawkes-net.mjs'"));
+if (!html.includes("'../hawkes-net.mjs'")) throw new Error('example/index.html changed: update tools/demo.mjs');
+fs.writeFileSync(path.join(out, 'index.html'), html.split("'../hawkes-net.mjs'").join("'./hawkes-net.mjs'"));
 const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 fs.writeFileSync(path.join(out, 'release.json'), JSON.stringify({ package: '@hawkesgen/net', version }, null, 2) + '\n');
 execFileSync('npm', ['pack', '--pack-destination', out, '--silent'], { cwd: root, stdio: 'inherit' });
