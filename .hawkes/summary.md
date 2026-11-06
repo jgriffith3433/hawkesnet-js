@@ -1,12 +1,11 @@
-# Docs site with recipes: beta build
+# Demo visual identity: beta build
 
-**What was wrong:** nothing in the code. Beta's last build stopped with "playtest.run needs 6 and 1 is left", which means Studio ran out of credits. It was not a compile or test failure. Two earlier attempts reached the same conclusion and committed nothing, so beta never got a playtest scenario named for these criteria.
+**What was wrong:** nothing in the code. Beta's build stopped with "playtest.run needs 6 and 1 is left": Studio is out of credits. It was not a compile or test failure.
 
-**What I checked (all green):**
-- `node --check hawkes-net.mjs` and `node --check hawkes-net-core.mjs`
-- `node tools/demo.mjs` makes `dist/` with `recipes.html`, the four recipes and the tarball.
-- `npm test` passes 7 tests: the four recipes (chat, cursors, shared state, password room) and the README chat snippet, all run against `test/fake-net.mjs`.
+**What is already on beta (kept):** the dark theme, a distinct colour and short fading trail per player, a side list with each player's connection kind (relay or peer to peer), and AA contrast. The `smoke` scenario shows each as a check: "Each player has a distinct colour and a short trail", "The side list shows every player and how they are connected", "Text and dots on the page have AA contrast".
 
-**What I changed:** only `.hawkes/scenario.txt`, which now names the `recipes` scenario. Beta's playtest will play it. It checks that the demo links to all four recipes, shows their code, and runs each live with a second player. No SDK or demo code changed.
+**Checked (green):** `node --check` on both SDK files, `node tools/demo.mjs` (makes dist/ and the 1.3.0 tarball), `npm test` (7 pass).
 
-**For J:** the build can only go green after credits are added in Settings → Plan and credits. No GPU work was involved, so there is no estimate.
+**Changed:** only `.hawkes/scenario.txt`, which now names `smoke`. No SDK or demo code changed.
+
+**For J:** the build goes green once credits are added in Settings → Plan and credits. No GPU work, so no estimate.

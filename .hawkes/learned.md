@@ -1,1 +1,1 @@
-- lesson: red beta can be credits — "playtest.run needs N and M is left" is a Studio credit shortage; confirm with `npm test` and `node tools/demo.mjs`, then don't hunt for a bug. A "nothing to do" pass should still commit `.hawkes/scenario.txt` so the playtest knows which scenario to play.
+- lesson: red beta can be credits — "playtest.run needs N and M is left" is a Studio credit shortage, not code; confirm with npm test and node tools/demo.mjs. The visual-identity checks live in `smoke` (example/index.html `extra`), so name `smoke` in scenario.txt.
