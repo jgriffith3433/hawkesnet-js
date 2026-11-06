@@ -13,3 +13,10 @@ The page has Studio's playtest bot (`example/net-playtest.mjs`, `window.hawkesPl
 in the same page and checks the room, poses both ways (the dot moved by real pointer input), messages both ways and
 leaving; `two-players` is for Studio's peers playtest (real browsers on one `?room=`). Each check shows on the page and
 in the report. The same file lives in hawkesnet (`public/demo-playtest.mjs`) and hawkesnet-babylon: change all three.
+
+**Recipes:** the four recipes (chat, cursors, shared state, a room with a password) are files in `recipes/`. The README, the
+demo's `recipes.html` page and `npm test` (`test/`, which swaps only the import for `test/fake-net.mjs`) all use those exact
+files. To add one: put the file in `recipes/`, list it in `RECIPES` in `example/recipes.mjs`, and it is tested, linked and
+played by the `recipes` playtest scenario (`example/recipes-playtest.mjs`, passed to `net-playtest.mjs` as `scenarios`).
+Example files import `'../hawkes-net.mjs'`; `tools/demo.mjs` rewrites that for `dist/`, so a new example page or module
+must be copied there too. A "room with a password" is a room name made from the password, not access control (tickets are).
