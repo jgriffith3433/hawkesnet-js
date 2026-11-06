@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hawkes Net recipes</title>
+<style>
+  :root { --bg: #0b0f14; --panel: #10151d; --line: #2a3340; --text: #e8eaed; --muted: #a7afbb; --accent: #9fe870; --link: #7fb3ff; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 system-ui, sans-serif; }
+  main { max-width: 820px; margin: 0 auto; padding: 24px 16px 80px; }
+  a { color: var(--link); }
+  h1 { font-size: 26px; margin: 0 0 4px; } h1 b { color: var(--accent); }
+  h2 { font-size: 20px; margin: 0 0 4px; }
+  .lead, .muted { color: var(--muted); }
+  nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 28px; }
+  nav a { padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; }
+  section.recipe { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 0 0 24px; scroll-margin-top: 12px; }
+  pre { margin: 10px 0; padding: 10px; background: #161b22; border-radius: 6px; overflow: auto; font: 12.5px/1.55 ui-monospace, Menlo, monospace; }
+  pre.out { color: var(--accent); min-height: 3em; max-height: 220px; }
+  button, input { font: inherit; padding: 4px 12px; margin-right: 6px; border-radius: 6px; border: 1px solid #3a4150; background: #1f2630; color: inherit; }
+  button { cursor: pointer; } button:disabled { color: var(--muted); cursor: default; }
+  .tryit { margin: 4px 0 0; }
+  code { font: 13px ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <p class="muted"><a href="./index.html">← The demo</a></p>
+  <h1><b>Hawkes</b> Net recipes</h1>
+  <p class="lead">Four things most multiplayer games need, each as code you can paste. They run here, live, on Hawkes Net's free test project
+  <code>netdemo</code>; for your game, use your own project from <a href="https://net.hawkesgen.ai">net.hawkesgen.ai</a>.</p>
+  <p class="lead" id="net"></p>
+  <nav id="toc"></nav>
+  <p class="muted"><code>npm install @hawkesgen/net</code>. In a page without a build step, import the same names from
+  <code>https://net.hawkesgen.ai/sdk/hawkes-net@1.mjs</code>.</p>
+  <div id="recipes"></div>
+</main>
+<script type="module">
+  import { VERSION } from '../hawkes-net.mjs';
+  import { RECIPES, sourceOf, runLive, CDN } from './recipes.mjs';
+  document.getElementById('net').textContent = `@hawkesgen/net ${VERSION} on ` + (globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, '');
+  const sdk = new URL('../hawkes-net.mjs', location.href).href;
+  const toc = document.getElementById('toc'), box = document.getElementById('recipes');
+  for (const r of RECIPES) {
+    const a = document.createElement('a'); a.href = `#${r.id}`; a.textContent = r.title; toc.append(a);
+    const s = document.createElement('section'); s.className = 'recipe'; s.id = r.id; s.dataset.recipe = r.id;
+    const h = document.createElement('h2'); h.textContent = r.title;
+    const p = document.createElement('p'); p.textContent = r.blurb;
+    const pre = document.createElement('pre'); pre.className = 'code'; pre.textContent = 'Loading…';
+    const out = document.createElement('pre'); out.className = 'out'; out.setAttribute('aria-live', 'polite');
+    const bar = document.createElement('div');
+    let pw = null;
+    if (r.password) { pw = document.createElement('input'); pw.value = r.password; pw.setAttribute('aria-label', 'Password'); bar.append(pw); }
+    const run = document.createElement('button'); run.type = 'button'; run.className = 'run'; run.textContent = 'Run it here';
+    const copy = document.createElement('button'); copy.type = 'button'; copy.textContent = 'Copy';
+    bar.append(run, copy);
+    const tip = document.createElement('p'); tip.className = 'muted tryit'; tip.textContent = r.seeIt;
+    s.append(h, p, pre, bar, out, tip); box.append(s);
+    // Shown with the package address a game uses; run with this page's copy of the SDK (same code).
+    sourceOf(r).then((t) => { pre.textContent = t; }, (e) => { pre.textContent = `Could not load the code: ${e.message}`; });
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(pre.textContent); copy.textContent = 'Copied'; } catch { getSelection().selectAllChildren(pre); copy.textContent = 'Selected: press Ctrl+C'; }
+    });
+    run.addEventListener('click', async () => {
+      run.disabled = true; run.textContent = 'Running (reload to stop)'; if (pw) pw.disabled = true;
+      const lines = [];
+      const log = (l) => { lines.push(l); out.textContent = lines.slice(-30).join('\n'); };
+      try { await runLive(r, { sdk, log, swap: pw ? [[`'${r.password}'`, JSON.stringify(pw.value)]] : [] }); }
+      catch (e) { log('Error: ' + (e?.message || e)); }
+    });
+  }
+  if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
+  // ?run=chat starts a recipe at once, so a link can open straight into a live example.
+  const auto = new URLSearchParams(location.search).get('run');
+  if (auto) document.querySelector(`#${CSS.escape(auto)} .run`)?.click();
+</script>
+</body>
+</html>

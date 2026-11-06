@@ -16,6 +16,13 @@ fs.copyFileSync(path.join(root, 'example', 'net-playtest.mjs'), path.join(out, '
 const html = fs.readFileSync(path.join(root, 'example', 'index.html'), 'utf8');
 if (!html.includes("'../hawkes-net.mjs'")) throw new Error('example/index.html changed: update tools/demo.mjs');
 fs.writeFileSync(path.join(out, 'index.html'), html.split("'../hawkes-net.mjs'").join("'./hawkes-net.mjs'"));
+// The recipes: the docs page, its helper modules, and the recipes' code (the same files `npm test` runs).
+const sdkPath = (t) => t.split("'../hawkes-net.mjs'").join("'./hawkes-net.mjs'");
+fs.writeFileSync(path.join(out, 'recipes.html'), sdkPath(fs.readFileSync(path.join(root, 'example', 'recipes.html'), 'utf8')));
+fs.writeFileSync(path.join(out, 'recipes.mjs'), fs.readFileSync(path.join(root, 'example', 'recipes.mjs'), 'utf8').replace("'../recipes/'", "'./recipes/'"));
+fs.copyFileSync(path.join(root, 'example', 'recipes-playtest.mjs'), path.join(out, 'recipes-playtest.mjs'));
+fs.mkdirSync(path.join(out, 'recipes'), { recursive: true });
+for (const f of fs.readdirSync(path.join(root, 'recipes'))) fs.copyFileSync(path.join(root, 'recipes', f), path.join(out, 'recipes', f));
 const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 fs.writeFileSync(path.join(out, 'release.json'), JSON.stringify({ package: '@hawkesgen/net', version }, null, 2) + '\n');
 execFileSync('npm', ['pack', '--pack-destination', out, '--silent'], { cwd: root, stdio: 'inherit' });

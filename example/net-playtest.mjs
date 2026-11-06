@@ -23,6 +23,8 @@
 //     tolerance: 0.02,                                    // "the same place", in the page's units
 //     extra: async (c) => {},                             // optional more checks: c.check(name, fn), c.main, c.bot
 //     ready: () => true,                                  // optional: the page is ready to play (default: main() exists)
+//     scenarios: [{ id, title, seconds, tags, description,  // optional more scenarios of this page's own:
+//       run: async (c) => {} }],                          //   c.check(name, fn), c.until, c.wait, c.metric, c.progress
 //   });
 
 export function installNetPlaytest(o) {
@@ -32,6 +34,7 @@ export function installNetPlaytest(o) {
     { id: 'two-players', title: 'Real browsers on one ?room= find each other, move and message', seconds: 75, tags: ['full', 'multiplayer'],
       description: 'Run with Studio peers 2-4: each browser waits for another player in its ?room=, moves by real input, checks it sees the other move and that messages go both ways.' },
   ];
+  for (const sc of o.scenarios ?? []) scenarios.push({ tags: ['full'], seconds: 60, ...sc });
   const STALL = 60;
   let run = null;
   let bot = null;
@@ -191,6 +194,11 @@ export function installNetPlaytest(o) {
     finish(run.lines.every((l) => l.ok) ? 'won' : 'lost');
   }
 
+  async function custom(sc) {
+    await sc.run({ check, until, wait, metric, progress, log });
+    finish(run.lines.every((l) => l.ok) ? 'won' : 'lost');
+  }
+
   async function twoPlayers() {
     let main = o.main();
     const room = new URLSearchParams(location.search).get('room');
@@ -237,7 +245,7 @@ export function installNetPlaytest(o) {
   const api = {
     version: 1,
     product: o.product,
-    scenarios: () => scenarios.map((s) => ({ ...s })),
+    scenarios: () => scenarios.map(({ run: _run, ...s }) => s),
     async start(id, options = {}) {
       const sc = scenarios.find((s) => s.id === id);
       if (run && !run.done) api.stop();
@@ -247,7 +255,7 @@ export function installNetPlaytest(o) {
       event('start', id); event('scene', 'Demo'); show();
       try {
         if (!sc) { problem('bug', `no playtest scenario "${id}" (have: ${scenarios.map((s) => s.id).join(', ')})`); return finish('error'); }
-        await (id === 'two-players' ? twoPlayers() : smoke());
+        await (sc.run ? custom(sc) : id === 'two-players' ? twoPlayers() : smoke());
       } catch (e) {
         if (mine === run && !mine.done) { problem('bug', `bot error: ${e?.message ?? e}`); log(String(e?.stack ?? e)); finish('error'); }
       } finally {
