@@ -1,1 +1,0 @@
-- lesson: red beta can be credits — "playtest.run needs N and M is left" is a Studio credit shortage, not code; confirm with npm test and node tools/demo.mjs. The visual-identity checks live in `smoke` (example/index.html `extra`), so name `smoke` in scenario.txt.
