@@ -93,9 +93,15 @@ net.join('quickstart');</pre>
   // A short trail behind every dot: where it was in the last TRAIL_MS, fading to nothing. It shrinks away when a dot stands still.
   const TRAIL_MS = 700;
   const trails = new Map(); // id (or 'me') -> [{ x, y, t }]
-  const trailPush = (key, x, y, t) => {
+  let trailBreaks = 0;
+  // A trail is one continuous stroke. When a dot is set to a place instead of travelling there (it joins, its first pose lands,
+  // the pointer jumps) or two samples are farther apart than TRAIL_JUMP, the history is dropped and a new stroke starts at the
+  // new spot, so no line is drawn from the old spot to the new one.
+  const TRAIL_JUMP = 0.12; // screen widths between two frames; a dot never travels this far in a frame (MAX_SPEED is ~0.016)
+  const trailPush = (key, x, y, t, set = false) => {
     let a = trails.get(key); if (!a) trails.set(key, (a = []));
-    const l = a[a.length - 1];
+    let l = a[a.length - 1];
+    if (l && (set || Math.hypot(l.x - x, l.y - y) > TRAIL_JUMP)) { a.length = 0; l = null; trailBreaks++; }
     if (!l || Math.hypot(l.x - x, l.y - y) > 0.0005) a.push({ x, y, t });
     while (a.length && t - a[0].t > TRAIL_MS) a.shift();
   };
@@ -109,6 +115,7 @@ net.join('quickstart');</pre>
   const smooth = q.get('smooth') !== '0';
   const glide = { lagMs: Math.max(0, Number(q.get('lag')) || 0), packets: 0, watch: null };
   const others = new Map();
+  const justSet = new Set(); // dots whose spot was set this frame (first pose), for the trail
   const tracks = new Map();
   // The lobby's room can change (a rejoin, a new shard): the link figures are always the current room's.
   const links = { note: (from, at) => net.room?.links?.note(from, at), get: (from) => net.room?.links?.get(from) };
@@ -126,8 +133,8 @@ net.join('quickstart');</pre>
     const p = [s.p[0], s.p[1], s.p[2]], gen = roomGen;
     if (glide.lagMs) setTimeout(() => land(gen, id, p, at), glide.lagMs); else land(gen, id, p, at);
   });
-  net.when('peer:leave', ({ peer }) => { tracks.delete(peer.id); others.delete(peer.id); trails.delete(peer.id); colors.delete(peer.id); });
-  net.when('joined', () => { roomGen++; tracks.clear(); others.clear(); trails.clear(); colors.clear(); }); // a new room has its own clock
+  net.when('peer:leave', ({ peer }) => { justSet.delete(peer.id); tracks.delete(peer.id); others.delete(peer.id); trails.delete(peer.id); colors.delete(peer.id); });
+  net.when('joined', () => { justSet.clear(); roomGen++; tracks.clear(); others.clear(); trails.clear(); colors.clear(); }); // a new room has its own clock
   const setLag = (ms) => {
     glide.lagMs = ms;
     document.getElementById('glide').textContent = (smooth ? 'Other players glide (interpolated)' : 'Other players snap to each packet (?smooth=0)') + (ms ? ` · +${ms} ms simulated latency` : '');
@@ -299,6 +306,44 @@ net.join('quickstart');</pre>
           metric('playerColours', new Set(colorsNow).size); metric('trailMaxMs', Math.round(Math.max(...spans.map((x) => x.ms))));
           return `${colorsNow.length} colours (${colorsNow.join(' ')}), trails of ${spans.map((x) => x.n).join('/')} points over at most ${Math.round(Math.max(...spans.map((x) => x.ms)))} ms`;
         });
+        const longest = (a) => a.reduce((m, p, i) => (i ? Math.max(m, Math.hypot(p.x - a[i - 1].x, p.y - a[i - 1].y)) : m), 0);
+        await check('A player who joins, or jumps to a new spot, draws no line from the old spot to the new one', async () => {
+          // A third player joins and its pose lands far from where this page's player stands; this page's own player then
+          // jumps across the canvas by real pointer input (a click far away). Neither may leave a line between the two spots.
+          pointer(0.15, 0.2); await wait(300);
+          const before = trailBreaks, from = [me.x, me.y];
+          const late = lobby({ ...opts, name: 'Late joiner', log: false });
+          try {
+            late.join('js-demo');
+            await until(() => net.peers.size >= 2, 8000, 'the third player to join');
+            const spot = [0.85, 0.8];
+            const send = setInterval(() => { try { late.pose([spot[0], spot[1], 0], 0); } catch { /* left */ } }, 50);
+            try {
+              await until(() => { const a = trails.get([...net.peers.keys()].find((k) => k !== bot.id)); return a && a.length >= 1 && Math.hypot(a[a.length - 1].x - spot[0], a[a.length - 1].y - spot[1]) < 0.02; }, 6000, 'the joiner to be drawn at its spot');
+              await wait(300);
+            } finally { clearInterval(send); }
+            const id = [...net.peers.keys()].find((k) => k !== bot.id), a = trails.get(id) || [];
+            if (longest(a) > TRAIL_JUMP) throw new Error(`the joiner drew a ${r3(longest(a))}-wide line from nowhere to its spot`);
+            if (a.some((p) => Math.hypot(p.x - 0.5, p.y - 0.5) < 0.2)) throw new Error('the joiner left a trail near the middle, where a dot is first drawn');
+            metric('joinTrailLongest', r3(longest(a)));
+            pointer(0.9, 0.85); await wait(150); pointer(0.9, 0.86); await wait(150); // the player's own click far away
+            const mine = trails.get('me') || [];
+            if (mine.some((p) => Math.hypot(p.x - from[0], p.y - from[1]) < 0.1)) throw new Error('the old spot is still in the trail after the jump: a line joins it to the new one');
+            if (longest(mine) > TRAIL_JUMP) throw new Error(`a ${r3(longest(mine))}-wide line joins the old spot to the new one`);
+            if (trailBreaks <= before) throw new Error('no new stroke was started for the jump');
+            metric('trailBreaks', trailBreaks - before);
+            return `joiner trail longest segment ${r3(longest(a))}, jump of ${r3(Math.hypot(0.9 - from[0], 0.85 - from[1]))} drew none (${trailBreaks - before} new strokes)`;
+          } finally { try { await late.leave(); } catch { /* gone */ } }
+        });
+        await check('Normal movement still draws a smooth short trail', async () => {
+          let k = 0;
+          await until(() => { pointer(0.5 + 0.12 * Math.sin(k / 6), 0.5 + 0.12 * Math.cos(k++ / 6)); const a = trails.get('me'); return a && a.length >= 6 && a[0].t > performance.now() - TRAIL_MS; }, 6000, 'a trail behind the moving player');
+          const a = trails.get('me'), seg = longest(a), span = a[a.length - 1].t - a[0].t;
+          if (seg > TRAIL_JUMP) throw new Error(`a moving player's trail has a ${r3(seg)}-wide segment`);
+          if (span > TRAIL_MS + 100) throw new Error(`the trail spans ${Math.round(span)} ms`);
+          metric('trailLongestSegment', r3(seg));
+          return `${a.length} points over ${Math.round(span)} ms, longest segment ${r3(seg)}`;
+        });
         await check('The side list shows every player and how they are connected', async () => {
           await until(() => rows().length === net.peers.size + 1 && rows().every((r) => /relay|peer to peer/i.test(r.kind)), 5000, () => `a row per player with its connection kind (${JSON.stringify(rows())})`);
           const r = rows();
@@ -458,6 +503,7 @@ net.join('quickstart');</pre>
       const v = smooth ? t.sample() : t.newest?.v;
       if (!v) continue;
       let o = others.get(id);
+      if (!o) justSet.add(id); // first pose: the dot is set at its spot, not moved there
       if (!o || !smooth) others.set(id, (o = { x: v[0], y: v[1] }));
       else {
         let dx = (v[0] - o.x) * ease, dy = (v[1] - o.y) * ease;
@@ -473,7 +519,7 @@ net.join('quickstart');</pre>
       if (o && n) glide.watch.frames.push({ t: performance.now(), x: o.x, y: o.y, nx: n[0], ny: n[1], packets: glide.packets });
     }
     drawBackdrop(c.width, c.height, d);
-    for (const o of dots) trailPush(o.key, o.cx / c.width, o.cy / c.height, tNow);
+    for (const o of dots) trailPush(o.key, o.cx / c.width, o.cy / c.height, tNow, justSet.delete(o.key));
     for (const o of dots) drawTrail(o, c.width, c.height, d, tNow);
     for (const o of dots) {
       g.fillStyle = o.color; g.shadowColor = o.color; g.shadowBlur = 14 * d;
