@@ -67,6 +67,7 @@ net.join('quickstart');</pre>
   import { recipesScenario } from './recipes-playtest.mjs';
   const q = new URLSearchParams(location.search);
   const endpoint = q.get('net') || undefined;
+  document.getElementById('net').dataset.version = VERSION;
   document.getElementById('net').textContent = `@hawkesgen/net ${VERSION} on ` + (endpoint || globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, '');
   const name = 'Player ' + Math.floor(Math.random() * 900 + 100);
   // No liveHosts: every page gets the project's free test rooms.

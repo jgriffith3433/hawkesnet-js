@@ -1,6 +1,6 @@
 {
   "name": "@hawkesgen/net",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Hawkes Net's client SDK: multiplayer rooms for web games (relay or peer to peer), messages, avatars, synced state, express frames, the shared clock and background play. https://net.hawkesgen.ai",
   "type": "module",
   "main": "./hawkes-net.mjs",
