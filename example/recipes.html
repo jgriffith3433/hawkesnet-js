@@ -39,6 +39,7 @@
 <script type="module">
   import { VERSION } from '../hawkes-net.mjs';
   import { RECIPES, sourceOf, runLive, CDN } from './recipes.mjs';
+  document.getElementById('net').dataset.version = VERSION;
   document.getElementById('net').textContent = `@hawkesgen/net ${VERSION} on ` + (globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, '');
   const sdk = new URL('../hawkes-net.mjs', location.href).href;
   const toc = document.getElementById('toc'), box = document.getElementById('recipes');

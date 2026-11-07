@@ -17,7 +17,7 @@
 // synced states (only the keys that changed since that connection last got them).
 
 export const PROTOCOL = 3;
-export const VERSION = '1.3.0';
+export const VERSION = '1.4.0';
 
 /** Room defaults; a room's config and its ticket's limits narrow them. */
 export const DEFAULT_LIMITS = {
