@@ -8,7 +8,7 @@
   :root { --bg: #0b0f14; --bg2: #141b24; --panel: rgba(16,21,29,.9); --line: #2a3340; --text: #e8eaed; --muted: #a7afbb; --accent: #9fe870; --link: #7fb3ff; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px system-ui, sans-serif; overflow: hidden; }
   canvas { width: 100%; height: 100%; display: block; touch-action: none; }
-  #side { position: fixed; left: 12px; top: 12px; width: 260px; max-width: calc(50% - 18px); display: flex; flex-direction: column; gap: 8px; z-index: 5; }
+  #side { position: fixed; left: 12px; top: 12px; bottom: 12px; width: 260px; max-width: calc(50% - 18px); overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 8px; z-index: 5; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
   #hud { line-height: 1.5; }
   #hud h1 { margin: 0 0 2px; font-size: 15px; letter-spacing: .02em; }
@@ -28,7 +28,7 @@
   #banner[data-state=connecting], #banner[data-state=reconnecting] { --c: #ffd84d; }
   #banner[data-state=online] { --c: #9fe870; }
   #banner[data-state=offline], #banner[data-state=full] { --c: #ff8a80; }
-  #quick { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 10; max-width: 720px; background: rgba(11,15,20,.94); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+  #quick { position: fixed; left: 284px; right: 12px; bottom: 12px; z-index: 10; max-width: 720px; max-height: calc(100% - 24px); overflow: auto; background: rgba(11,15,20,.94); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
   #quick a { color: var(--link); }
   #quick summary { cursor: pointer; font-weight: 600; }
   #quick pre { margin: 8px 0; padding: 8px; background: #161b22; border-radius: 6px; overflow: auto; max-height: 30vh; font: 12px/1.5 ui-monospace, Menlo, monospace; }
@@ -45,7 +45,7 @@
   <div id="recipes" class="card"><h2>Recipes</h2><p class="muted" style="margin:0 0 6px">Live code you can paste</p><div id="recipe-links"><a href="./recipes.html?run=chat#chat">Chat</a><a href="./recipes.html?run=cursors#cursors">Cursors</a><a href="./recipes.html?run=shared-state#shared-state">Shared state</a><a href="./recipes.html?run=password-room#password-room">Room with a password</a></div></div>
   <div id="players" class="card" aria-label="Players in this room"><h2><span>Players</span><span id="players-n"></span></h2><ul id="plist"></ul></div>
 </div>
-<details id="quick" open>
+<details id="quick">
 <summary>Quickstart: your own player in this room, in five lines</summary>
 <p style="margin:6px 0">Paste this into any page's <code>&lt;script type="module"&gt;</code> (or use <b>Run it here</b>). Your project comes from <a href="https://net.hawkesgen.ai">net.hawkesgen.ai</a>; <code>netdemo</code> is the free test project.</p>
 <pre id="qs-code">import { lobby } from 'https://net.hawkesgen.ai/sdk/hawkes-net@1.mjs';
@@ -303,6 +303,23 @@ net.join('quickstart');</pre>
           if (!r.some((x) => /\(you\)/.test(x.name))) throw new Error('you are not in the list');
           if (!r.some((x) => x.name === 'Playtest bot')) throw new Error('the second player is not in the list');
           return r.map((x) => `${x.name}: ${x.kind}`).join(' / ');
+        });
+        await check('Every row of the side list is visible, with nothing laid over it', async () => {
+          const lis = [...document.querySelectorAll('#plist li')];
+          if (!lis.length) throw new Error('no rows in the side list');
+          const side = document.getElementById('side');
+          for (const li of lis) {
+            li.scrollIntoView({ block: 'nearest' });
+            const b = li.getBoundingClientRect();
+            if (b.height < 1 || b.bottom > innerHeight || b.top < 0) throw new Error(`row "${li.textContent}" is off screen`);
+            for (const [x, y] of [[b.left + 4, b.top + 3], [b.right - 4, b.bottom - 3]]) {
+              const top = document.elementFromPoint(x, y);
+              if (!top || !li.contains(top)) throw new Error(`row "${li.querySelector('.nm').textContent}" is covered by ${top ? (top.id ? '#' + top.id : top.tagName) : 'nothing'}`);
+            }
+          }
+          const q = document.getElementById('quick').getBoundingClientRect(), s = side.getBoundingClientRect();
+          if (q.left < s.right) throw new Error('the quickstart panel overlaps the side column');
+          return `${lis.length} rows visible, quickstart starts at x=${Math.round(q.left)}, side ends at x=${Math.round(s.right)}`;
         });
         await check('Text and dots on the page have AA contrast', async () => {
           // WCAG 2.x: 4.5:1 for text, 3:1 for graphics. Backgrounds are composited over the lightest the floor gets (#141b24).
