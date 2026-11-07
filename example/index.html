@@ -112,6 +112,7 @@ net.join('quickstart');</pre>
   // The lobby's room can change (a rejoin, a new shard): the link figures are always the current room's.
   const links = { note: (from, at) => net.room?.links?.note(from, at), get: (from) => net.room?.links?.get(from) };
   const FOLLOW_MS = 60;
+  const MAX_SPEED = 0.95; // a dot never travels faster than this many screen widths a second, whatever the Track says (a late or bunched packet makes it slide, not leap)
   let roomGen = 0, lastFrame = performance.now();
   const land = (gen, id, p, at) => {
     if (gen !== roomGen || !net.peers.has(id)) return;
@@ -449,7 +450,7 @@ net.join('quickstart');</pre>
     // Each dot follows its Track's point with a short ease (FOLLOW_MS): when the network hiccups and the Track corrects
     // its guess, the dot slides there over a few frames instead of jumping.
     const tNow = performance.now(), ease = 1 - Math.exp(-(tNow - lastFrame) / FOLLOW_MS);
-    lastFrame = tNow;
+    const frameAt = lastFrame; lastFrame = tNow;
     for (const [id, t] of tracks) {
       const p = net.peers.get(id);
       if (!p) { tracks.delete(id); others.delete(id); continue; }
@@ -457,7 +458,12 @@ net.join('quickstart');</pre>
       if (!v) continue;
       let o = others.get(id);
       if (!o || !smooth) others.set(id, (o = { x: v[0], y: v[1] }));
-      else { o.x += (v[0] - o.x) * ease; o.y += (v[1] - o.y) * ease; }
+      else {
+        let dx = (v[0] - o.x) * ease, dy = (v[1] - o.y) * ease;
+        const cap = MAX_SPEED * Math.min(tNow - frameAt, 100) / 1000, len = Math.hypot(dx, dy);
+        if (len > cap) { dx *= cap / len; dy *= cap / len; }
+        o.x += dx; o.y += dy;
+      }
       dots.push({ key: id, cx: o.x * c.width, cy: o.y * c.height, color: colorFor(id), label: p.name || id });
     }
     // The playtest's frame log for one player: where each frame drew it, when, and how many poses had landed by then.
