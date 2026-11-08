@@ -22,6 +22,17 @@
   button { cursor: pointer; } button:disabled { color: var(--muted); cursor: default; }
   .tryit { margin: 4px 0 0; }
   code { font: 13px ui-monospace, Menlo, monospace; }
+  /* A phone: text wraps, code blocks scroll inside their own box, and nothing makes the page wider than the screen. */
+  p, h1, h2, li { overflow-wrap: anywhere; }
+  pre { max-width: 100%; box-sizing: border-box; -webkit-overflow-scrolling: touch; }
+  section.recipe { min-width: 0; }
+  @media (max-width: 700px) {
+    main { padding: 16px 12px 64px; }
+    h1 { font-size: 24px; }
+    pre { font-size: 13px; }
+    nav a { padding: 8px 14px; }
+    button, input { padding: 8px 14px; margin-bottom: 6px; max-width: 100%; box-sizing: border-box; }
+  }
 </style>
 </head>
 <body>

@@ -14,6 +14,8 @@ in the same page and checks the room, poses both ways (the dot moved by real poi
 leaving; `two-players` is for Studio's peers playtest (real browsers on one `?room=`). Each check shows on the page and
 in the report. The same file lives in hawkesnet (`public/demo-playtest.mjs`) and hawkesnet-babylon: change all three.
 
+**Phone:** under 700 px the demo page stacks (canvas, banner, players, quickstart; the page scrolls) and only the canvas moves the dot (pointer events, touch drag/tap). The `phone` scenario (`example/phone-playtest.mjs`) opens each page in a 390x844 frame and checks it; the smoke bot drags by touch when the page is stacked.
+
 **Recipes:** the four recipes (chat, cursors, shared state, a room with a password) are files in `recipes/`. The README, the
 demo's `recipes.html` page and `npm test` (`test/`, which swaps only the import for `test/fake-net.mjs`) all use those exact
 files. To add one: put the file in `recipes/`, list it in `RECIPES` in `example/recipes.mjs`, and it is tested, linked and
