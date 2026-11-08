@@ -76,6 +76,11 @@ net.join('quickstart');</pre>
   const net = lobby({ ...opts, name });
   net.join('js-demo');
   const me = { x: 0.5, y: 0.5 };
+  // The play area is the page to the right of the side column (Players, Recipes): 0..1 is mapped onto it, so a dot or a
+  // label is never drawn under a card. `areaLeft()` is its left edge in CSS pixels, a little clear of the cards.
+  const sideEl = document.getElementById('side');
+  const areaLeft = () => Math.min(innerWidth * 0.6, Math.ceil(sideEl.getBoundingClientRect().right) + 16);
+  const areaPx = (x) => areaLeft() + x * (innerWidth - areaLeft()); // 0..1 across the play area -> CSS pixels
   // Every player gets their own colour: you are amber, everyone else takes the first palette colour nobody here has. All of
   // them are at least 3:1 against the page (AA for graphics); the playtest measures it.
   const YOU = '#ffd84d';
@@ -105,7 +110,7 @@ net.join('quickstart');</pre>
     if (!l || Math.hypot(l.x - x, l.y - y) > 0.0005) a.push({ x, y, t });
     while (a.length && t - a[0].t > TRAIL_MS) a.shift();
   };
-  let labelRects = [], canvasSize = [0, 0];
+  let labelRects = [], canvasSize = [0, 0], areaL = 0;
   // Other players glide. Each pose that arrives goes into a Track (the SDK's snapshot buffer, on the room's shared clock),
   // and every frame draws where the Track says that player was a moment ago: just behind the newest pose, by the link's
   // measured delay and jitter. So a dot moves every frame, instead of jumping once per packet, and a late or bunched packet
@@ -173,19 +178,20 @@ net.join('quickstart');</pre>
   }
   for (const ev of ['status', 'joined', 'transport', 'left']) net.when(ev, () => renderBanner(ev));
   renderBanner('start');
-  const move = (e) => { me.x = e.clientX / innerWidth; me.y = e.clientY / innerHeight; };
+  const move = (e) => { const L = areaLeft(); me.x = Math.max(0, Math.min(1, (e.clientX - L) / (innerWidth - L))); me.y = Math.max(0, Math.min(1, e.clientY / innerHeight)); };
   addEventListener('pointermove', move);
   addEventListener('pointerdown', move);
   setInterval(() => net.pose([me.x, me.y, 0]), 50);
 
   // Studio's playtest bot (net-playtest.mjs): a second player in this page, the dot moved by real pointer input.
-  const pointer = (x, y) => dispatchEvent(new PointerEvent('pointermove', { clientX: x * innerWidth, clientY: y * innerHeight, bubbles: true }));
+  const pointer = (x, y) => dispatchEvent(new PointerEvent('pointermove', { clientX: x * innerWidth, clientY: y * innerHeight, bubbles: true })); // the page's own width (the recipes scenario)
+  const areaPointer = (x, y) => dispatchEvent(new PointerEvent('pointermove', { clientX: areaPx(x), clientY: y * innerHeight, bubbles: true })); // 0..1 over the play area
   installNetPlaytest({
     product: 'hawkes-net-js',
     where: (endpoint || globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, ''),
     main: () => net,
     openBot: async () => { const b = lobby({ ...opts, name: 'Playtest bot', log: false }); b.join('js-demo'); return b; },
-    drive: async (step) => { for (let i = 0; i <= 30; i++) { pointer(0.2 + i * 0.02, 0.3 + Math.sin(i / 5) * 0.1); await step(60); } },
+    drive: async (step) => { for (let i = 0; i <= 30; i++) { areaPointer(0.2 + i * 0.02, 0.3 + Math.sin(i / 5) * 0.1); await step(60); } },
     myPos: () => [me.x, me.y, 0],
     shownPos: (id) => { const o = others.get(id); return o ? [o.x, o.y, 0] : null; },
     botPose: (u) => [0.25 + 0.5 * u, 0.75, 0],
@@ -193,9 +199,9 @@ net.join('quickstart');</pre>
     scenarios: [recipesScenario({ lobby, opts, pointer, sdk: new URL('../hawkes-net.mjs', location.href).href,
       hash: async (t) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, '0')).join('') })],
     extra: async ({ check, bot, until, wait, metric }) => {
-      const readable = (n) => labelRects.length >= n && labelRects.every((l) => l.x >= 0 && l.y >= 0 && l.x + l.w <= canvasSize[0] && l.y + l.h <= canvasSize[1]) &&
+      const readable = (n) => labelRects.length >= n && labelRects.every((l) => l.x >= areaL - 0.5 && l.y >= 0 && l.x + l.w <= canvasSize[0] && l.y + l.h <= canvasSize[1]) &&
         labelRects.every((a, i) => labelRects.every((b, j) => j <= i || !hit(a, b)));
-      const meet = async (x, y) => { pointer(x, y); follow(at([x, y, 0])); await until(() => { const o = others.get(bot.id); return o && Math.hypot(o.x - x, o.y - y) < 0.02 && Math.hypot(me.x - x, me.y - y) < 0.02; }, 5000, `both players to be at ${x}, ${y}`); await wait(200); };
+      const meet = async (x, y) => { areaPointer(x, y); follow(at([x, y, 0])); await until(() => { const o = others.get(bot.id); return o && Math.hypot(o.x - x, o.y - y) < 0.02 && Math.hypot(me.x - x, me.y - y) < 0.02; }, 5000, `both players to be at ${x}, ${y}`); await wait(200); };
       const banner = () => ({ state: bannerEl.dataset.state, text: bannerEl.textContent });
       // Gliding: the second player keeps sending its pose every 50 ms (as this page sends its own, moving or not) along
       // `path`, while this page logs, every frame, where it drew that player and how many poses had landed by then.
@@ -297,7 +303,7 @@ net.join('quickstart');</pre>
           await until(() => shownNear(circle(0)), 5000, 'the other player to reach the start of its circle');
           follow(circle);
           let k = 0; // this page's player moves by real pointer input too
-          await until(() => { pointer(0.3 + 0.1 * Math.sin(k / 4), 0.6 + 0.1 * Math.cos(k++ / 4)); const a = trails.get('me'), b = trails.get(bot.id); return a && b && a.length >= 4 && b.length >= 4; }, 6000, 'a trail behind each moving player');
+          await until(() => { areaPointer(0.3 + 0.1 * Math.sin(k / 4), 0.6 + 0.1 * Math.cos(k++ / 4)); const a = trails.get('me'), b = trails.get(bot.id); return a && b && a.length >= 4 && b.length >= 4; }, 6000, 'a trail behind each moving player');
           const colorsNow = rows().map((r) => r.color);
           if (colorsNow.length < 2 || new Set(colorsNow).size !== colorsNow.length) throw new Error(`players share a colour: ${colorsNow.join(', ')}`);
           const spans = [...trails].map(([id, a]) => ({ id, n: a.length, ms: a.length ? a[a.length - 1].t - a[0].t : 0 }));
@@ -310,7 +316,7 @@ net.join('quickstart');</pre>
         await check('A player who joins, or jumps to a new spot, draws no line from the old spot to the new one', async () => {
           // A third player joins and its pose lands far from where this page's player stands; this page's own player then
           // jumps across the canvas by real pointer input (a click far away). Neither may leave a line between the two spots.
-          pointer(0.15, 0.2); await wait(300);
+          areaPointer(0.15, 0.2); await wait(300);
           const before = trailBreaks, from = [me.x, me.y];
           const late = lobby({ ...opts, name: 'Late joiner', log: false });
           try {
@@ -326,7 +332,7 @@ net.join('quickstart');</pre>
             if (longest(a) > TRAIL_JUMP) throw new Error(`the joiner drew a ${r3(longest(a))}-wide line from nowhere to its spot`);
             if (a.some((p) => Math.hypot(p.x - 0.5, p.y - 0.5) < 0.2)) throw new Error('the joiner left a trail near the middle, where a dot is first drawn');
             metric('joinTrailLongest', r3(longest(a)));
-            pointer(0.9, 0.85); await wait(150); pointer(0.9, 0.86); await wait(150); // the player's own click far away
+            areaPointer(0.9, 0.85); await wait(150); areaPointer(0.9, 0.86); await wait(150); // the player's own click far away
             const mine = trails.get('me') || [];
             if (mine.some((p) => Math.hypot(p.x - from[0], p.y - from[1]) < 0.1)) throw new Error('the old spot is still in the trail after the jump: a line joins it to the new one');
             if (longest(mine) > TRAIL_JUMP) throw new Error(`a ${r3(longest(mine))}-wide line joins the old spot to the new one`);
@@ -337,7 +343,7 @@ net.join('quickstart');</pre>
         });
         await check('Normal movement still draws a smooth short trail', async () => {
           let k = 0;
-          await until(() => { pointer(0.5 + 0.12 * Math.sin(k / 6), 0.5 + 0.12 * Math.cos(k++ / 6)); const a = trails.get('me'); return a && a.length >= 6 && a[0].t > performance.now() - TRAIL_MS; }, 6000, 'a trail behind the moving player');
+          await until(() => { areaPointer(0.5 + 0.12 * Math.sin(k / 6), 0.5 + 0.12 * Math.cos(k++ / 6)); const a = trails.get('me'); return a && a.length >= 6 && a[0].t > performance.now() - TRAIL_MS; }, 6000, 'a trail behind the moving player');
           const a = trails.get('me'), seg = longest(a), span = a[a.length - 1].t - a[0].t;
           if (seg > TRAIL_JUMP) throw new Error(`a moving player's trail has a ${r3(seg)}-wide segment`);
           if (span > TRAIL_MS + 100) throw new Error(`the trail spans ${Math.round(span)} ms`);
@@ -396,12 +402,34 @@ net.join('quickstart');</pre>
           await until(() => readable(2), 3000, () => `two labels that do not overlap (${JSON.stringify(labelRects.map((l) => [l.label, Math.round(l.x), Math.round(l.y)]))})`);
           return labelRects.map((l) => l.label).join(' / ');
         });
-        await check('Labels stay inside the canvas at every edge', async () => {
+        await check('Labels stay inside the play area, clear of the side panels, at every edge', async () => {
+          // The visible play area is the page right of the side column. At every corner and side both players meet there, and
+          // each label (and each dot) is measured against the real rectangles of the cards, not just the canvas.
+          const cards = () => [...document.querySelectorAll('#side .card')].map((e) => e.getBoundingClientRect());
+          const d = devicePixelRatio, over = (x, y, w, h, r) => x < r.right && r.left < x + w && y < r.bottom && r.top < y + h;
           for (const [x, y] of [[0, 0], [1, 0], [1, 1], [0, 1], [0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]]) {
             await meet(x, y);
-            await until(() => readable(2), 3000, () => `both labels inside the canvas and apart at ${x}, ${y} (${JSON.stringify(labelRects.map((l) => [Math.round(l.x), Math.round(l.y), Math.round(l.w)]))} in ${canvasSize})`);
+            await until(() => readable(2), 3000, () => `both labels inside the play area and apart at ${x}, ${y} (${JSON.stringify(labelRects.map((l) => [Math.round(l.x), Math.round(l.y), Math.round(l.w)]))} in ${canvasSize}, play area from ${Math.round(areaL)})`);
+            const side = document.getElementById('side').getBoundingClientRect();
+            for (const l of labelRects) for (const r of cards()) if (over(l.x / d, l.y / d, l.w / d, l.h / d, r)) throw new Error(`the label "${l.label}" overlaps a side panel at ${x}, ${y}`);
+            const dotsAt = [[me.x, me.y], ...[...others.values()].map((o) => [o.x, o.y])];
+            for (const [px, py] of dotsAt) {
+              const cx = areaPx(px), cy = py * innerHeight;
+              if (cx - 12 < side.right) throw new Error(`a dot at ${x}, ${y} is drawn at x=${Math.round(cx)}, under the side panels (they end at x=${Math.round(side.right)})`);
+              for (const r of cards()) if (over(cx - 12, cy - 12, 24, 24, r)) throw new Error(`a dot at ${x}, ${y} overlaps a side panel`);
+            }
           }
-          return 'corners and sides';
+          metric('playAreaLeftPx', Math.round(areaL / devicePixelRatio));
+          return `corners and sides; the play area starts at x=${Math.round(areaL / devicePixelRatio)}`;
+        });
+        await check('A dot moved to the far left stays right of the side panels', async () => {
+          areaPointer(0, 0.5); // the pointer at the left edge of the play area
+          await until(() => me.x === 0, 2000, 'the pointer to reach the left edge');
+          const pe = document.getElementById('side').getBoundingClientRect(), L = areaPx(0);
+          if (L - 12 < pe.right) throw new Error(`the dot's left edge (x=${Math.round(L - 12)}) is under the side panels (they end at x=${Math.round(pe.right)})`);
+          dispatchEvent(new PointerEvent('pointermove', { clientX: 2, clientY: innerHeight / 2, bubbles: true })); // the real far left of the page
+          if (me.x !== 0) throw new Error(`the pointer over the panels put the dot at ${me.x}, not at the edge of the play area`);
+          return `far left of the page keeps the dot at x=${Math.round(L)}, panels end at x=${Math.round(pe.right)}`;
         });
       } finally { clearInterval(feed); }
     },
@@ -424,9 +452,9 @@ net.join('quickstart');</pre>
 
   const c = document.getElementById('c'), g = c.getContext('2d');
   // Labels: each dot's name goes beside it, moved to the first free spot (right, left, below, above, then rows further out)
-  // so two nearby dots, or two on the same spot, never write over each other, and clamped to stay inside the canvas.
+  // so two nearby dots, or two on the same spot, never write over each other, and clamped to stay inside the play area (L: its left edge).
   const hit = (a, b, pad = 0) => a.x < b.x + b.w + pad && b.x < a.x + a.w + pad && a.y < b.y + b.h + pad && b.y < a.y + a.h + pad;
-  function layoutLabels(dots, W, H, d) {
+  function layoutLabels(dots, W, H, d, L) {
     const R = 12 * d, gap = 4 * d, h = 16 * d, pad = 2 * d, placed = [];
     g.font = `${12 * d}px system-ui`;
     const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, Math.max(lo, hi)));
@@ -437,10 +465,10 @@ net.join('quickstart');</pre>
       for (let k = 1; k <= dots.length + 3; k++) for (const sgn of [1, -1]) { cands.push([R + gap, sgn * k * row - h / 2], [-R - gap - w, sgn * k * row - h / 2]); }
       let pick = null;
       for (const [dx, dy] of cands) {
-        const r = { x: clamp(o.cx + dx, 0, W - w), y: clamp(o.cy + dy, 0, H - h), w, h };
+        const r = { x: clamp(o.cx + dx, L, W - w), y: clamp(o.cy + dy, 0, H - h), w, h };
         if (!placed.some((p) => hit(r, p, pad)) && !discs.some((q, j) => j !== i && hit(r, q))) { pick = r; break; }
       }
-      pick ||= { x: clamp(o.cx + R + gap, 0, W - w), y: clamp(o.cy - h / 2, 0, H - h), w, h };
+      pick ||= { x: clamp(o.cx + R + gap, L, W - w), y: clamp(o.cy - h / 2, 0, H - h), w, h };
       placed.push(pick);
       return { ...pick, label: o.label };
     });
@@ -454,14 +482,14 @@ net.join('quickstart');</pre>
     const step = 40 * d;
     for (let x = step / 2; x < W; x += step) for (let y = step / 2; y < H; y += step) g.fillRect(x, y, 2 * d, 2 * d);
   }
-  function drawTrail(o, W, H, d, t) {
+  function drawTrail(o, W, H, d, t, L) {
     const a = trails.get(o.key);
     if (!a || a.length < 2) return;
     g.lineCap = 'round'; g.strokeStyle = o.color;
     for (let i = 1; i < a.length; i++) {
       const k = Math.max(0, 1 - (t - a[i].t) / TRAIL_MS); // 1 at the dot, 0 at the end of the trail
       g.globalAlpha = 0.65 * k; g.lineWidth = (3 + 9 * k) * d;
-      g.beginPath(); g.moveTo(a[i - 1].x * W, a[i - 1].y * H); g.lineTo(a[i].x * W, a[i].y * H); g.stroke();
+      g.beginPath(); g.moveTo(L + a[i - 1].x * (W - L), a[i - 1].y * H); g.lineTo(L + a[i].x * (W - L), a[i].y * H); g.stroke();
     }
     g.globalAlpha = 1;
   }
@@ -491,8 +519,10 @@ net.join('quickstart');</pre>
   }
   (function draw() {
     const d = devicePixelRatio;
+    const L = areaLeft() * d; // the play area starts here (device pixels)
+    areaL = L;
     c.width = innerWidth * d; c.height = innerHeight * d;
-    const dots = [{ key: 'me', cx: me.x * c.width, cy: me.y * c.height, color: YOU, label: name + ' (you)' }]; // you first: your label gets the best spot
+    const dots = [{ key: 'me', cx: (L + me.x * (c.width - L)), cy: me.y * c.height, color: YOU, label: name + ' (you)' }]; // you first: your label gets the best spot
     // Each dot follows its Track's point with a short ease (FOLLOW_MS): when the network hiccups and the Track corrects
     // its guess, the dot slides there over a few frames instead of jumping.
     const tNow = performance.now(), ease = 1 - Math.exp(-(tNow - lastFrame) / FOLLOW_MS);
@@ -511,7 +541,7 @@ net.join('quickstart');</pre>
         if (len > cap) { dx *= cap / len; dy *= cap / len; }
         o.x += dx; o.y += dy;
       }
-      dots.push({ key: id, cx: o.x * c.width, cy: o.y * c.height, color: colorFor(id), label: p.name || id });
+      dots.push({ key: id, cx: L + o.x * (c.width - L), cy: o.y * c.height, color: colorFor(id), label: p.name || id });
     }
     // The playtest's frame log for one player: where each frame drew it, when, and how many poses had landed by then.
     if (glide.watch) {
@@ -519,15 +549,15 @@ net.join('quickstart');</pre>
       if (o && n) glide.watch.frames.push({ t: performance.now(), x: o.x, y: o.y, nx: n[0], ny: n[1], packets: glide.packets });
     }
     drawBackdrop(c.width, c.height, d);
-    for (const o of dots) trailPush(o.key, o.cx / c.width, o.cy / c.height, tNow, justSet.delete(o.key));
-    for (const o of dots) drawTrail(o, c.width, c.height, d, tNow);
+    for (const o of dots) trailPush(o.key, (o.cx - L) / (c.width - L), o.cy / c.height, tNow, justSet.delete(o.key));
+    for (const o of dots) drawTrail(o, c.width, c.height, d, tNow, L);
     for (const o of dots) {
       g.fillStyle = o.color; g.shadowColor = o.color; g.shadowBlur = 14 * d;
       g.beginPath(); g.arc(o.cx, o.cy, 12 * d, 0, Math.PI * 2); g.fill();
       g.shadowBlur = 0; g.lineWidth = 2 * d; g.strokeStyle = 'rgba(11,15,20,.9)'; g.stroke();
     }
     renderList(dots);
-    const labels = layoutLabels(dots, c.width, c.height, d);
+    const labels = layoutLabels(dots, c.width, c.height, d, L);
     g.textBaseline = 'middle';
     for (const l of labels) {
       g.fillStyle = 'rgba(14,17,22,.78)'; g.beginPath(); g.roundRect(l.x, l.y, l.w, l.h, 4 * d); g.fill();
