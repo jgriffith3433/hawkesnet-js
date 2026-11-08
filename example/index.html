@@ -35,13 +35,28 @@
   #quick button { font: inherit; padding: 4px 12px; margin-right: 6px; border-radius: 6px; border: 1px solid #3a4150; background: #1f2630; color: inherit; cursor: pointer; }
   #quick button:disabled { color: var(--muted); cursor: default; }
   #qs-out { color: var(--accent); min-height: 1.5em; max-height: 14vh; }
+  /* A phone (or any narrow window): the page scrolls and everything stacks under the canvas, in this order: canvas, banner,
+     players and recipes, quickstart. Nothing is fixed, nothing is wider than the screen, and a code block scrolls inside its box. */
+  @media (max-width: 700px) {
+    html, body { height: auto; overflow: visible; }
+    canvas { height: min(100vw, 56vh); min-height: 240px; }
+    #banner { position: static; transform: none; margin: 8px 12px 0; max-width: none; border-radius: 14px; font-size: 15px; }
+    #banner small { font-size: 14px; }
+    #side { position: static; width: auto; max-width: none; margin: 8px 12px 0; overflow: visible; }
+    #hud small, #players .kind, #players h2, #recipes h2 { font-size: 14px; }
+    #recipe-links a { padding: 4px 0; }
+    #quick { position: static; margin: 8px 12px 16px; max-width: none; max-height: none; overflow: visible; font-size: 15px; }
+    #quick p, #quick summary, #hud, #side .card { overflow-wrap: anywhere; }
+    #quick pre { font-size: 13px; max-height: 40vh; }
+    #quick button { padding: 8px 14px; }
+  }
 </style>
 </head>
 <body>
-<canvas id="c"></canvas>
+<canvas id="c" aria-label="The room: every player is a dot"></canvas>
 <div id="banner" role="status" aria-live="polite" data-state="connecting"><b>Connecting…</b><small>Reaching Hawkes Net.</small></div>
 <div id="side">
-  <div id="hud" class="card"><h1><b>Hawkes</b> Net</h1><span id="who"></span> · <span id="count">1 here</span><br><small>Move the mouse (or drag) · open this page twice</small><br><small id="net"></small><br><small id="glide"></small></div>
+  <div id="hud" class="card"><h1><b>Hawkes</b> Net</h1><span id="who"></span> · <span id="count">1 here</span><br><small>Move the mouse, or drag or tap on the canvas · open this page twice</small><br><small id="net"></small><br><small id="glide"></small></div>
   <div id="recipes" class="card"><h2>Recipes</h2><p class="muted" style="margin:0 0 6px">Live code you can paste</p><div id="recipe-links"><a href="./recipes.html?run=chat#chat">Chat</a><a href="./recipes.html?run=cursors#cursors">Cursors</a><a href="./recipes.html?run=shared-state#shared-state">Shared state</a><a href="./recipes.html?run=password-room#password-room">Room with a password</a></div></div>
   <div id="players" class="card" aria-label="Players in this room"><h2><span>Players</span><span id="players-n"></span></h2><ul id="plist"></ul></div>
 </div>
@@ -65,6 +80,7 @@ net.join('quickstart');</pre>
   import { lobby, VERSION, Track } from '../hawkes-net.mjs';
   import { installNetPlaytest } from './net-playtest.mjs';
   import { recipesScenario } from './recipes-playtest.mjs';
+  import { phoneScenario } from './phone-playtest.mjs';
   const q = new URLSearchParams(location.search);
   const endpoint = q.get('net') || undefined;
   document.getElementById('net').dataset.version = VERSION;
@@ -75,12 +91,18 @@ net.join('quickstart');</pre>
   const opts = { project: q.get('project') || 'netdemo', transport: 'relay', ...(endpoint ? { endpoint } : {}) };
   const net = lobby({ ...opts, name });
   net.join('js-demo');
+  const c = document.getElementById('c'), g = c.getContext('2d');
   const me = { x: 0.5, y: 0.5 };
-  // The play area is the page to the right of the side column (Players, Recipes): 0..1 is mapped onto it, so a dot or a
-  // label is never drawn under a card. `areaLeft()` is its left edge in CSS pixels, a little clear of the cards.
+  // The play area is the canvas, minus (on a wide window) the side column (Players, Recipes) that sits over its left: 0..1 is
+  // mapped onto it, so a dot or a label is never drawn under a card. On a narrow window (a phone) the side column is not
+  // fixed: it stacks under the canvas, and the play area is the whole canvas. `areaLeft()` is its left edge in CSS pixels
+  // from the canvas's left (a little clear of the cards); `areaPx`/`yPx` are viewport pixels for 0..1 across it.
   const sideEl = document.getElementById('side');
-  const areaLeft = () => Math.min(innerWidth * 0.6, Math.ceil(sideEl.getBoundingClientRect().right) + 16);
-  const areaPx = (x) => areaLeft() + x * (innerWidth - areaLeft()); // 0..1 across the play area -> CSS pixels
+  const stacked = () => getComputedStyle(sideEl).position !== 'fixed';
+  const box = () => c.getBoundingClientRect();
+  const areaLeft = () => { if (stacked()) return 0; const b = box(); return Math.min(b.width * 0.6, Math.ceil(sideEl.getBoundingClientRect().right - b.left) + 16); };
+  const areaPx = (x) => { const b = box(), L = areaLeft(); return b.left + L + x * (b.width - L); };
+  const yPx = (y) => { const b = box(); return b.top + y * b.height; };
   // Every player gets their own colour: you are amber, everyone else takes the first palette colour nobody here has. All of
   // them are at least 3:1 against the page (AA for graphics); the playtest measures it.
   const YOU = '#ffd84d';
@@ -178,25 +200,41 @@ net.join('quickstart');</pre>
   }
   for (const ev of ['status', 'joined', 'transport', 'left']) net.when(ev, () => renderBanner(ev));
   renderBanner('start');
-  const move = (e) => { const L = areaLeft(); me.x = Math.max(0, Math.min(1, (e.clientX - L) / (innerWidth - L))); me.y = Math.max(0, Math.min(1, e.clientY / innerHeight)); };
+  // The dot follows the pointer. On a wide window that is the mouse anywhere over the page. On a phone the page scrolls, so
+  // only the canvas moves it: the mouse over it, or a finger (or pen) pressed on it and dragged or tapped (pointer events).
+  let pressed = false;
+  const move = (e) => {
+    if (stacked() && !(e.target === c && (e.pointerType === 'mouse' || pressed))) return;
+    const b = box(), L = areaLeft();
+    me.x = Math.max(0, Math.min(1, (e.clientX - b.left - L) / (b.width - L))); me.y = Math.max(0, Math.min(1, (e.clientY - b.top) / b.height));
+  };
   addEventListener('pointermove', move);
-  addEventListener('pointerdown', move);
+  addEventListener('pointerdown', (e) => {
+    if (e.target === c) { pressed = true; try { c.setPointerCapture(e.pointerId); } catch { /* a synthetic pointer */ } }
+    move(e);
+  });
+  for (const t of ['pointerup', 'pointercancel']) addEventListener(t, () => { pressed = false; });
+  // For Studio's playtest: where this page's dot is and whether the page is laid out as a phone (read-only).
+  window.hawkesDemoView = () => ({ me: { ...me }, stacked: stacked(), version: VERSION });
   setInterval(() => net.pose([me.x, me.y, 0]), 50);
 
   // Studio's playtest bot (net-playtest.mjs): a second player in this page, the dot moved by real pointer input.
   const pointer = (x, y) => dispatchEvent(new PointerEvent('pointermove', { clientX: x * innerWidth, clientY: y * innerHeight, bubbles: true })); // the page's own width (the recipes scenario)
-  const areaPointer = (x, y) => dispatchEvent(new PointerEvent('pointermove', { clientX: areaPx(x), clientY: y * innerHeight, bubbles: true })); // 0..1 over the play area
+  const areaPointer = (x, y) => c.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'mouse', clientX: areaPx(x), clientY: yPx(y), bubbles: true })); // 0..1 over the play area
+  // A finger on a phone: press on the canvas, drag, lift (pointer events with pointerType 'touch').
+  const touch = (type, x, y) => c.dispatchEvent(new PointerEvent(type, { pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: areaPx(x), clientY: yPx(y), bubbles: true, cancelable: true }));
+  const drag = async (step) => { touch('pointerdown', 0.2, 0.3); for (let i = 0; i <= 30; i++) { touch('pointermove', 0.2 + i * 0.02, 0.3 + Math.sin(i / 5) * 0.1); await step(60); } touch('pointerup', 0.8, 0.3); };
   installNetPlaytest({
     product: 'hawkes-net-js',
     where: (endpoint || globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, ''),
     main: () => net,
     openBot: async () => { const b = lobby({ ...opts, name: 'Playtest bot', log: false }); b.join('js-demo'); return b; },
-    drive: async (step) => { for (let i = 0; i <= 30; i++) { areaPointer(0.2 + i * 0.02, 0.3 + Math.sin(i / 5) * 0.1); await step(60); } },
+    drive: async (step) => { if (stacked()) return drag(step); for (let i = 0; i <= 30; i++) { areaPointer(0.2 + i * 0.02, 0.3 + Math.sin(i / 5) * 0.1); await step(60); } }, // a phone: by touch
     myPos: () => [me.x, me.y, 0],
     shownPos: (id) => { const o = others.get(id); return o ? [o.x, o.y, 0] : null; },
     botPose: (u) => [0.25 + 0.5 * u, 0.75, 0],
     tolerance: 0.02,
-    scenarios: [recipesScenario({ lobby, opts, pointer, sdk: new URL('../hawkes-net.mjs', location.href).href,
+    scenarios: [phoneScenario({ pages: { demo: new URL('./index.html', location.href).href, recipes: new URL('./recipes.html', location.href).href } }), recipesScenario({ lobby, opts, pointer, sdk: new URL('../hawkes-net.mjs', location.href).href,
       hash: async (t) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, '0')).join('') })],
     extra: async ({ check, bot, until, wait, metric }) => {
       const readable = (n) => labelRects.length >= n && labelRects.every((l) => l.x >= areaL - 0.5 && l.y >= 0 && l.x + l.w <= canvasSize[0] && l.y + l.h <= canvasSize[1]) &&
@@ -371,6 +409,7 @@ net.join('quickstart');</pre>
             }
           }
           const q = document.getElementById('quick').getBoundingClientRect(), s = side.getBoundingClientRect();
+          if (stacked()) return `${lis.length} rows visible, stacked under the canvas`;
           if (q.left < s.right) throw new Error('the quickstart panel overlaps the side column');
           return `${lis.length} rows visible, quickstart starts at x=${Math.round(q.left)}, side ends at x=${Math.round(s.right)}`;
         });
@@ -405,6 +444,7 @@ net.join('quickstart');</pre>
         await check('Labels stay inside the play area, clear of the side panels, at every edge', async () => {
           // The visible play area is the page right of the side column. At every corner and side both players meet there, and
           // each label (and each dot) is measured against the real rectangles of the cards, not just the canvas.
+          if (stacked()) return 'phone layout: the panels are under the canvas, not over it (the phone scenario checks that)';
           const cards = () => [...document.querySelectorAll('#side .card')].map((e) => e.getBoundingClientRect());
           const d = devicePixelRatio, over = (x, y, w, h, r) => x < r.right && r.left < x + w && y < r.bottom && r.top < y + h;
           for (const [x, y] of [[0, 0], [1, 0], [1, 1], [0, 1], [0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]]) {
@@ -414,7 +454,7 @@ net.join('quickstart');</pre>
             for (const l of labelRects) for (const r of cards()) if (over(l.x / d, l.y / d, l.w / d, l.h / d, r)) throw new Error(`the label "${l.label}" overlaps a side panel at ${x}, ${y}`);
             const dotsAt = [[me.x, me.y], ...[...others.values()].map((o) => [o.x, o.y])];
             for (const [px, py] of dotsAt) {
-              const cx = areaPx(px), cy = py * innerHeight;
+              const cx = areaPx(px), cy = yPx(py);
               if (cx - 12 < side.right) throw new Error(`a dot at ${x}, ${y} is drawn at x=${Math.round(cx)}, under the side panels (they end at x=${Math.round(side.right)})`);
               for (const r of cards()) if (over(cx - 12, cy - 12, 24, 24, r)) throw new Error(`a dot at ${x}, ${y} overlaps a side panel`);
             }
@@ -425,6 +465,7 @@ net.join('quickstart');</pre>
         await check('A dot moved to the far left stays right of the side panels', async () => {
           areaPointer(0, 0.5); // the pointer at the left edge of the play area
           await until(() => me.x === 0, 2000, 'the pointer to reach the left edge');
+          if (stacked()) return 'phone layout: the left edge of the play area is the canvas edge';
           const pe = document.getElementById('side').getBoundingClientRect(), L = areaPx(0);
           if (L - 12 < pe.right) throw new Error(`the dot's left edge (x=${Math.round(L - 12)}) is under the side panels (they end at x=${Math.round(pe.right)})`);
           dispatchEvent(new PointerEvent('pointermove', { clientX: 2, clientY: innerHeight / 2, bubbles: true })); // the real far left of the page
@@ -450,7 +491,6 @@ net.join('quickstart');</pre>
     catch (e) { qsOut.textContent += 'Error: ' + (e?.message || e) + '\n'; }
   });
 
-  const c = document.getElementById('c'), g = c.getContext('2d');
   // Labels: each dot's name goes beside it, moved to the first free spot (right, left, below, above, then rows further out)
   // so two nearby dots, or two on the same spot, never write over each other, and clamped to stay inside the play area (L: its left edge).
   const hit = (a, b, pad = 0) => a.x < b.x + b.w + pad && b.x < a.x + a.w + pad && a.y < b.y + b.h + pad && b.y < a.y + a.h + pad;
@@ -521,7 +561,7 @@ net.join('quickstart');</pre>
     const d = devicePixelRatio;
     const L = areaLeft() * d; // the play area starts here (device pixels)
     areaL = L;
-    c.width = innerWidth * d; c.height = innerHeight * d;
+    const cb = box(); c.width = Math.round(cb.width * d); c.height = Math.round(cb.height * d);
     const dots = [{ key: 'me', cx: (L + me.x * (c.width - L)), cy: me.y * c.height, color: YOU, label: name + ' (you)' }]; // you first: your label gets the best spot
     // Each dot follows its Track's point with a short ease (FOLLOW_MS): when the network hiccups and the Track corrects
     // its guess, the dot slides there over a few frames instead of jumping.

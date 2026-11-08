@@ -21,6 +21,7 @@ const sdkPath = (t) => t.split("'../hawkes-net.mjs'").join("'./hawkes-net.mjs'")
 fs.writeFileSync(path.join(out, 'recipes.html'), sdkPath(fs.readFileSync(path.join(root, 'example', 'recipes.html'), 'utf8')));
 fs.writeFileSync(path.join(out, 'recipes.mjs'), fs.readFileSync(path.join(root, 'example', 'recipes.mjs'), 'utf8').replace("'../recipes/'", "'./recipes/'"));
 fs.copyFileSync(path.join(root, 'example', 'recipes-playtest.mjs'), path.join(out, 'recipes-playtest.mjs'));
+fs.copyFileSync(path.join(root, 'example', 'phone-playtest.mjs'), path.join(out, 'phone-playtest.mjs'));
 fs.mkdirSync(path.join(out, 'recipes'), { recursive: true });
 for (const f of fs.readdirSync(path.join(root, 'recipes'))) fs.copyFileSync(path.join(root, 'recipes', f), path.join(out, 'recipes', f));
 const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
