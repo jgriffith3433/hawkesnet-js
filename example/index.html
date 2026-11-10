@@ -1155,7 +1155,7 @@ net.join('quickstart');</pre>
       const a = tNow / 1500 + i * 2.1;
       dots.push({ key: 'load' + i, id: null, cx: L + (0.5 + 0.3 * Math.cos(a)) * (c.width - L), cy: (0.5 + 0.3 * Math.sin(a * 1.3)) * c.height, color: ['#ff8a80', '#7fb3ff', '#ffd84d'][i % 3], name: 'load' + i, label: 'load' + i, it: false });
     }
-    for (const id of [...pendingRipple]) { const o = dots.find((x) => x.id === id); if (o) { ripples.push({ x: o.cx, y: o.cy, t0: tNow }); scene.rippleTotal = (scene.rippleTotal || 0) + 1; pendingRipple.delete(id); } }
+    for (const id of [...pendingRipple]) { const o = dots.find((x) => x.id === id); ripples.push({ x: o ? o.cx : L + 0.5 * (c.width - L), y: o ? o.cy : 0.5 * c.height, t0: tNow }); scene.rippleTotal = (scene.rippleTotal || 0) + 1; pendingRipple.delete(id); } // a joiner without a pose yet ripples from the arena centre
     drawBackdrop(c.width, c.height, d, tNow, L);
     scene.glowBlobs = dots.length;
     for (const o of dots) trailPush(o.key, (o.cx - L) / (c.width - L), o.cy / c.height, tNow, justSet.delete(o.key));
