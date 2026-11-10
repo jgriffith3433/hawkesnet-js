@@ -17,6 +17,8 @@ export function recipesScenario({ lobby, opts, pointer, sdk, hash }) {
     cursors: { re: /Bot is at 0\.70, 0\.20/, bot: (b) => setInterval(() => b.pose([0.7, 0.2, 0]), 300), area: 'recipe-cursors' },
     'shared-state': { re: /score: \d+/ },
     'password-room': { re: /Bot: hi from the vault/, bot: (b) => setInterval(() => b.send('chat', 'hi from the vault'), 700) },
+    // Tag Run logs play: … then It:; no second player needed for the button check (recipe alone is host).
+    tag: { re: /play:.*Tag room|It:/ },
   };
   const frames = [];
   const open = (url, w, h) => new Promise((res, rej) => {
@@ -98,11 +100,11 @@ export function recipesScenario({ lobby, opts, pointer, sdk, hash }) {
   }
 
   return {
-    id: 'recipes', title: 'Each recipe has a live link and plays between two players', seconds: 190, tags: ['full', 'docs'],
-    description: 'Checks the demo links to the four recipes (chat, cursors, shared state, a room with a password), that each shows its code, and plays each one live with a second player: a message both ways, a cursor moved by pointer input, a shared score, and a password room that a wrong password does not reach. Then opens the recipes page at 1280x720 and at 390x844, presses Run it here on every recipe and expects each to print its result within 5 s, and checks every link on the demo and recipes pages answers (recipesRun, recipesPassed, linksBroken).',
+    id: 'recipes', title: 'Each recipe has a live link and plays between two players', seconds: 210, tags: ['full', 'docs'],
+    description: 'Checks the demo links to every recipe (chat, cursors, shared state, a room with a password, Tag), that each shows its code, and plays each one live with a second player: a message both ways, a cursor moved by pointer input, a shared score, a password room that a wrong password does not reach, and Tag (host It syncs to a joiner; Run opens the demo). Then opens the recipes page at 1280x720 and at 390x844, presses Run it here on every recipe and expects each to print its result within 5 s, and checks every link on the demo and recipes pages answers (recipesRun, recipesPassed, linksBroken).',
     run: async (c) => {
       try {
-        await c.check('The demo links to all four recipes', async () => {
+        await c.check('The demo links to every recipe', async () => {
           const links = [...document.querySelectorAll('#recipe-links a')];
           for (const r of RECIPES) if (!links.some((a) => new URL(a.href, location.href).hash === `#${r.id}` && /recipes\.html/.test(a.href))) throw new Error(`no link to the ${r.title} recipe`);
           return `${links.length} links`;
@@ -113,7 +115,7 @@ export function recipesScenario({ lobby, opts, pointer, sdk, hash }) {
             const src = await sourceOf(r, './recipes/');
             if (!/from '@hawkesgen\/net'/.test(src) || src.split('\n').length < 6) throw new Error(`${r.title}: code not found`);
           }
-          return 'four recipes';
+          return `${RECIPES.length} recipes`;
         });
         c.progress(0.2);
         const swapArea = (r) => [[`'${r.area}'`, `'${r.area}-${tag}'`]];
@@ -162,7 +164,7 @@ export function recipesScenario({ lobby, opts, pointer, sdk, hash }) {
             return 'host 10, recipe added 1, both show 11';
           });
         })();
-        c.progress(0.75);
+        c.progress(0.7);
         const password = `swordfish-${tag}`;
         const code = (await hash(`my-game/${password}`)).slice(0, 16);
         await c.check('A room with a password: the right one meets, a wrong one does not', async () => {
@@ -180,7 +182,32 @@ export function recipesScenario({ lobby, opts, pointer, sdk, hash }) {
           } finally { h.stop(); }
           return 'the right room heard it, the wrong room heard nothing';
         });
-        c.progress(0.85);
+        c.progress(0.8);
+        // Tag: recipe joins first so it is host and picks It; a second lobby receives the same It via sync.
+        await (async () => {
+          const r = by('tag'); lines.length = 0;
+          await c.check(`${r.title}: host It reaches a second player; Run opens the demo room`, async () => {
+            if (!r.openDemo) throw new Error('Tag recipe must set openDemo to the demo page');
+            const h = await runLive(r, { sdk, log: logTo, swap: swapArea(r) });
+            try {
+              await c.until(() => lines.some((l) => /^It:/.test(l)), 15000, () => `host to pick It (printed: ${lines.join(' | ')})`);
+              let seen = null;
+              const b = lobby({ ...opts, name: 'Bot', log: false });
+              bots.push(b);
+              b.when('joined', (room) => {
+                room.sync.state('tag', { get: () => ({}), set: (s) => { seen = s; } });
+                room.sync.action('tag:state', (s) => { seen = s; });
+                room.sync.action('tag:touch', () => {});
+              });
+              b.join(`${r.area}-${tag}`);
+              await online(c, b, 'the second Tag player');
+              await c.until(() => seen?.it, 15000, () => `second player to learn who is It (seen ${JSON.stringify(seen)})`);
+              c.event('tag-recipe-it', seen.it);
+              return `It ${seen.it}; openDemo ${r.openDemo}`;
+            } finally { h.stop(); }
+          });
+        })();
+        c.progress(0.88);
         await buttonsAndLinks(c);
       } finally { closeFrames(); for (const b of bots) { try { b.leave(); } catch { /* gone */ } } }
     },

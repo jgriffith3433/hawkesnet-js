@@ -15,6 +15,10 @@ export const RECIPES = [
     blurb: 'The room\'s name comes from a password, so people who know it meet and nobody else does.',
     seeIt: 'Open two tabs with the same password and they meet; give one another password and it stays alone.',
     password: 'swordfish' },
+  { id: 'tag', file: 'tag.mjs', area: 'recipe-tag', title: 'Tag',
+    blurb: 'A tiny game: the host keeps who is It in shared state, a tag action passes It with 1 s of immunity. Built only on the public SDK.',
+    seeIt: 'Run it here opens the demo Tag room in a new tab — open that page twice and chase; the log here still shows who is It.',
+    openDemo: './index.html' },
 ];
 
 /** The recipe's code as a game would write it (import from the package). */

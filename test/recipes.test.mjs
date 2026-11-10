@@ -35,13 +35,15 @@ const other = (name, area) => { const n = lobby({ project: 'netdemo', name }); n
 test.beforeEach(() => { hub.rooms.clear(); printed = []; });
 test.afterEach(() => { console.log = realLog; });
 
-test('there are four recipes, each a file with an import, a project and a way to run it live', () => {
-  assert.deepEqual(RECIPES.map((r) => r.id), ['chat', 'cursors', 'shared-state', 'password-room']);
+test('there are five recipes, each a file with an import, a project and a way to run it live', () => {
+  assert.deepEqual(RECIPES.map((r) => r.id), ['chat', 'cursors', 'shared-state', 'password-room', 'tag']);
   for (const r of RECIPES) {
     assert.ok(fs.existsSync(path.join(root, 'recipes', r.file)), r.file);
     assert.ok(r.title && r.blurb && r.area, `${r.id} has a title, blurb and area`);
     assert.match(fs.readFileSync(path.join(root, 'recipes', r.file), 'utf8'), /project: 'netdemo'/);
   }
+  const tag = RECIPES.find((r) => r.id === 'tag');
+  assert.equal(tag.openDemo, './index.html', 'Tag Run opens the demo two-player room');
 });
 
 test('chat: you hear what others say, and they hear you', async () => {
@@ -100,6 +102,24 @@ test('password room: the same password meets, a different one does not', async (
   assert.deepEqual(heard, ['Ada: we have the right password'], out.join(' | '));
   assert.deepEqual(overheard, [], 'a different password is a different room');
   assert.equal(hub.rooms.size, 2);
+});
+
+test('tag: host picks It in shared state and a late joiner receives it', async () => {
+  const out = await runRecipe('tag');
+  assert.ok(out.some((l) => /^It:/.test(l)), `host should print It (got: ${out.join(' | ')})`);
+  assert.ok(out.some((l) => /Tag room open/.test(l)), 'recipe announces the Tag room');
+
+  let seen = null;
+  const bob = lobby({ project: 'netdemo', name: 'Bob' });
+  bob.when('joined', (room) => {
+    room.sync.state('tag', { get: () => ({}), set: (s) => { seen = s; } });
+    room.sync.action('tag:state', (s) => { seen = s; });
+    room.sync.action('tag:touch', () => {});
+  });
+  bob.join('recipe-tag');
+  await settle();
+  assert.ok(seen?.it, `Bob should receive It from shared state (seen ${JSON.stringify(seen)})`);
+  bob.leave();
 });
 
 test('the README\'s chat snippet runs too, and talks to the chat recipe', async () => {
