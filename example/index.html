@@ -74,13 +74,73 @@ net.join('quickstart');</pre>
 <button id="qs-copy" type="button">Copy</button><button id="qs-run" type="button">Run it here</button>
 <pre id="qs-out" aria-live="polite"></pre>
 </details>
+<script>
+  // Playtest stub at once (Studio sees it while the module loads), then recover if the SDK import fails because this
+  // page was opened deeper than the site root: probe demo-root.json a few steps up and replace to that root.
+  (function () {
+    var err = null, gone = false, tried = Object.create(null);
+    window.hawkesPlaytest = {
+      version: 1, product: 'hawkes-net-js',
+      scenarios: function () { return []; },
+      start: function () {}, stop: function () {},
+      state: function () { return { ready: false, status: err ? 'error' : 'loading', note: err || 'loading' }; },
+      report: function () {
+        return err ? { scenario: '', outcome: 'error', seconds: 0, metrics: {}, problems: [{ severity: 'bug', message: err }] } : null;
+      },
+    };
+    function showCard(reason) {
+      err = String(reason || 'unknown error');
+      function paint() {
+        if (document.getElementById('hawkes-demo-error')) return;
+        var el = document.createElement('div');
+        el.id = 'hawkes-demo-error'; el.setAttribute('role', 'alert');
+        el.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:#0b0f14;color:#e8eaed;font:16px/1.5 system-ui,sans-serif;padding:24px';
+        var card = document.createElement('div');
+        card.style.cssText = 'max-width:28rem;padding:20px 22px;border:1px solid #2a3340;border-radius:12px;background:#10151d;box-shadow:0 6px 24px rgba(0,0,0,.35)';
+        card.textContent = 'The demo could not load its SDK: ' + err;
+        el.appendChild(card);
+        (document.body || document.documentElement).appendChild(el);
+      }
+      if (document.body) paint(); else document.addEventListener('DOMContentLoaded', paint);
+    }
+    window.__hawkesDemoBoot = {
+      fail: async function (e) {
+        if (gone) return;
+        var reason = (e && (e.message || String(e))) || 'module failed to load';
+        var bases = ['./', '../', '../../'];
+        for (var i = 0; i < bases.length; i++) {
+          var u = new URL(bases[i] + 'demo-root.json', location.href);
+          if (tried[u.href]) continue;
+          tried[u.href] = 1;
+          try {
+            var r = await fetch(u.href, { cache: 'no-store' });
+            if (!r.ok) continue;
+            var dest = new URL('.', u);
+            var leaf = location.pathname.replace(/\/+$/, '').split('/').pop() || 'index.html';
+            if (leaf.indexOf('.') < 0) leaf = 'index.html';
+            var go = new URL(leaf, dest);
+            go.search = location.search; go.hash = location.hash;
+            if (go.href.split('#')[0] !== location.href.split('#')[0]) { gone = true; location.replace(go.href); return; }
+          } catch (x) { /* try the next */ }
+        }
+        showCard(reason);
+      },
+    };
+  })();
+</script>
 <script type="module">
   // The SDK from this folder (npm: import { lobby } from '@hawkesgen/net'). ?net= another Hawkes Net (an origin);
   // ?project= your project. On a Studio beta site the page names beta Hawkes Net (window.HAWKES_NET_ENDPOINT).
-  import { lobby, VERSION, Track } from '../hawkes-net.mjs';
-  import { installNetPlaytest } from './net-playtest.mjs';
-  import { recipesScenario } from './recipes-playtest.mjs';
-  import { phoneScenario } from './phone-playtest.mjs';
+  let lobby, VERSION, Track, installNetPlaytest, recipesScenario, phoneScenario;
+  try {
+    ({ lobby, VERSION, Track } = await import('../hawkes-net.mjs'));
+    ({ installNetPlaytest } = await import('./net-playtest.mjs'));
+    ({ recipesScenario } = await import('./recipes-playtest.mjs'));
+    ({ phoneScenario } = await import('./phone-playtest.mjs'));
+  } catch (e) {
+    await window.__hawkesDemoBoot.fail(e);
+    throw e;
+  }
   const q = new URLSearchParams(location.search);
   const endpoint = q.get('net') || undefined;
   document.getElementById('net').dataset.version = VERSION;
@@ -235,7 +295,61 @@ net.join('quickstart');</pre>
     botPose: (u) => [0.25 + 0.5 * u, 0.75, 0],
     tolerance: 0.02,
     scenarios: [phoneScenario({ pages: { demo: new URL('./index.html', location.href).href, recipes: new URL('./recipes.html', location.href).href } }), recipesScenario({ lobby, opts, pointer, sdk: new URL('../hawkes-net.mjs', location.href).href,
-      hash: async (t) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, '0')).join('') })],
+      hash: async (t) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, '0')).join('') }),
+      {
+        id: 'demo-boot', title: 'Playtest hook, deep-path redirect, and SDK error card', seconds: 25, tags: ['smoke'],
+        description: 'Checks the playtest hook is present within 1 s, opening a deeper path under the site lands on the working demo with the same query string, and a path that cannot find the SDK shows a plain error card.',
+        run: async ({ check, until, wait, metric, progress }) => {
+          await check('The playtest hook appears within 1 s', async () => {
+            const t0 = performance.now();
+            await until(() => window.hawkesPlaytest?.scenarios?.().some((s) => s.id === 'smoke'), 1000, 'hawkesPlaytest with the real scenarios');
+            metric('hookMs', Math.round(performance.now() - t0));
+            return `${Math.round(performance.now() - t0)} ms; scenarios: ${window.hawkesPlaytest.scenarios().map((s) => s.id).join(', ')}`;
+          });
+          progress(0.3);
+          const frame = (url) => {
+            const f = document.createElement('iframe');
+            f.title = 'demo-boot check';
+            f.style.cssText = 'position:fixed;left:-9999px;top:0;width:900px;height:700px;border:0';
+            document.body.append(f);
+            f.src = url;
+            return f;
+          };
+          await check('A deeper path lands on the working demo with the same query string', async () => {
+            const token = 'q' + Date.now().toString(36);
+            const deep = new URL('./a/b/index.html', location.href);
+            deep.searchParams.set('playtest', '');
+            deep.searchParams.set('bootq', token);
+            const f = frame(deep.href);
+            try {
+              await until(() => {
+                try {
+                  const w = f.contentWindow; if (!w?.location) return false;
+                  const path = w.location.pathname.replace(/\/+$/, '');
+                  if (/\/a\/b(\/|$)/.test(path + '/')) return false;
+                  const q = new URLSearchParams(w.location.search);
+                  return q.get('bootq') === token && q.has('playtest') && w.hawkesDemoView && w.hawkesPlaytest?.scenarios?.().some((s) => s.id === 'smoke');
+                } catch { return false; }
+              }, 12000, 'the deep page to redirect to the demo root, keeping the query string');
+              await until(() => { try { return f.contentWindow.hawkesDemoView()?.version; } catch { return false; } }, 8000, 'the demo to load after redirect');
+              const w = f.contentWindow;
+              metric('deepRedirectPath', w.location.pathname);
+              return `${w.location.pathname}${w.location.search}`;
+            } finally { f.remove(); }
+          });
+          progress(0.7);
+          await check('If the SDK cannot load, a plain error card explains why', async () => {
+            const f = frame(new URL('./a/b/c/index.html', location.href).href);
+            try {
+              await until(() => { try { return f.contentDocument?.getElementById('hawkes-demo-error'); } catch { return false; } }, 12000, 'the SDK error card');
+              const text = f.contentDocument.getElementById('hawkes-demo-error').textContent.trim();
+              if (!/^The demo could not load its SDK:/.test(text)) throw new Error(`expected the SDK error card, got "${text.slice(0, 120)}"`);
+              return text.slice(0, 160);
+            } finally { f.remove(); }
+          });
+          progress(1);
+        },
+      }],
     extra: async ({ check, bot, until, wait, metric }) => {
       const readable = (n) => labelRects.length >= n && labelRects.every((l) => l.x >= areaL - 0.5 && l.y >= 0 && l.x + l.w <= canvasSize[0] && l.y + l.h <= canvasSize[1]) &&
         labelRects.every((a, i) => labelRects.every((b, j) => j <= i || !hit(a, b)));

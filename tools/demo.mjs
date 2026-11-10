@@ -26,5 +26,14 @@ fs.mkdirSync(path.join(out, 'recipes'), { recursive: true });
 for (const f of fs.readdirSync(path.join(root, 'recipes'))) fs.copyFileSync(path.join(root, 'recipes', f), path.join(out, 'recipes', f));
 const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 fs.writeFileSync(path.join(out, 'release.json'), JSON.stringify({ package: '@hawkesgen/net', version }, null, 2) + '\n');
+// Marker at the site root so a page opened too deep can find the real demo and location.replace() there.
+fs.writeFileSync(path.join(out, 'demo-root.json'), JSON.stringify({ demo: true, package: '@hawkesgen/net', version }, null, 2) + '\n');
+// Deep-path fixtures for the demo-boot playtest (and for a local check of /a/b/): same HTML, no SDK beside them.
+const indexOut = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+for (const rel of ['a/b', 'a/b/c']) {
+  const dir = path.join(out, ...rel.split('/'));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'index.html'), indexOut);
+}
 execFileSync('npm', ['pack', '--pack-destination', out, '--silent'], { cwd: root, stdio: 'inherit' });
 console.log(`dist/: demo and package of @hawkesgen/net ${version}`);

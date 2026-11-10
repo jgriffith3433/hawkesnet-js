@@ -47,9 +47,74 @@
   <code>https://net.hawkesgen.ai/sdk/hawkes-net@1.mjs</code>.</p>
   <div id="recipes"></div>
 </main>
+<script>
+  // Same boot stub as the demo: playtest hook at once, and recover if the SDK import fails from a deeper path.
+  (function () {
+    var err = null, gone = false, tried = Object.create(null);
+    window.hawkesPlaytest = {
+      version: 1, product: 'hawkes-net-js',
+      scenarios: function () { return []; },
+      start: function () {}, stop: function () {},
+      state: function () { return { ready: false, status: err ? 'error' : 'loading', note: err || 'loading' }; },
+      report: function () {
+        return err ? { scenario: '', outcome: 'error', seconds: 0, metrics: {}, problems: [{ severity: 'bug', message: err }] } : null;
+      },
+    };
+    function showCard(reason) {
+      err = String(reason || 'unknown error');
+      function paint() {
+        if (document.getElementById('hawkes-demo-error')) return;
+        var el = document.createElement('div');
+        el.id = 'hawkes-demo-error'; el.setAttribute('role', 'alert');
+        el.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:#0b0f14;color:#e8eaed;font:16px/1.5 system-ui,sans-serif;padding:24px';
+        var card = document.createElement('div');
+        card.style.cssText = 'max-width:28rem;padding:20px 22px;border:1px solid #2a3340;border-radius:12px;background:#10151d;box-shadow:0 6px 24px rgba(0,0,0,.35)';
+        card.textContent = 'The demo could not load its SDK: ' + err;
+        el.appendChild(card);
+        (document.body || document.documentElement).appendChild(el);
+      }
+      if (document.body) paint(); else document.addEventListener('DOMContentLoaded', paint);
+    }
+    window.__hawkesDemoBoot = {
+      fail: async function (e) {
+        if (gone) return;
+        var reason = (e && (e.message || String(e))) || 'module failed to load';
+        var bases = ['./', '../', '../../'];
+        for (var i = 0; i < bases.length; i++) {
+          var u = new URL(bases[i] + 'demo-root.json', location.href);
+          if (tried[u.href]) continue;
+          tried[u.href] = 1;
+          try {
+            var r = await fetch(u.href, { cache: 'no-store' });
+            if (!r.ok) continue;
+            var dest = new URL('.', u);
+            var leaf = location.pathname.replace(/\/+$/, '').split('/').pop() || 'index.html';
+            if (leaf.indexOf('.') < 0) leaf = 'index.html';
+            var go = new URL(leaf, dest);
+            go.search = location.search; go.hash = location.hash;
+            if (go.href.split('#')[0] !== location.href.split('#')[0]) { gone = true; location.replace(go.href); return; }
+          } catch (x) { /* try the next */ }
+        }
+        showCard(reason);
+      },
+    };
+  })();
+</script>
 <script type="module">
-  import { VERSION } from '../hawkes-net.mjs';
-  import { RECIPES, sourceOf, runLive, CDN } from './recipes.mjs';
+  let VERSION, RECIPES, sourceOf, runLive, CDN;
+  try {
+    ({ VERSION } = await import('../hawkes-net.mjs'));
+    ({ RECIPES, sourceOf, runLive, CDN } = await import('./recipes.mjs'));
+  } catch (e) {
+    await window.__hawkesDemoBoot.fail(e);
+    throw e;
+  }
+  // Recipes has no scenarios of its own: clear the boot stub so a stray ?playtest= does not hang on loading.
+  window.hawkesPlaytest = {
+    version: 1, product: 'hawkes-net-js',
+    scenarios: () => [], start() {}, stop() {},
+    state: () => ({ ready: true, status: 'idle' }), report: () => null,
+  };
   document.getElementById('net').dataset.version = VERSION;
   document.getElementById('net').textContent = `@hawkesgen/net ${VERSION} on ` + (globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, '');
   const sdk = new URL('../hawkes-net.mjs', location.href).href;
