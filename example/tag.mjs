@@ -124,8 +124,14 @@ export function createTag(net, options = {}) {
   }
 
   function broadcastState(next) {
+    // Apply on this screen immediately, then one tag:state action to the room (not a
+    // second _s resend — that added another wait on the state tick / relay path).
     applyState(next);
-    stateHandle?.resend?.();
+    // Peers apply the same `_a` in this send; don't wait for their tag:ack echo before
+    // treating the handoff as shown on both sides (ack still arrives and confirms).
+    if (next?.it != null && Number.isFinite(next.seq)) {
+      for (const id of peersMap().keys()) peerAck.set(id, { it: next.it, seq: next.seq });
+    }
     if (commitAction) commitAction(next);
   }
 
@@ -195,7 +201,8 @@ export function createTag(net, options = {}) {
       return;
     }
 
-    // Non-host: if I am It and touch a peer, or if It touches me, ask the host to commit the tag.
+    // Non-host: if I am It and touch a peer, or if It touches me, show the handoff here at once
+    // (don't wait for the host's tag:state echo), then ask the host to commit in one action.
     if (!touchAction) return;
     let targetId = null;
     if (game.it === me) {
@@ -208,12 +215,25 @@ export function createTag(net, options = {}) {
       if (myP && Math.hypot(itPos.x - myP.x, itPos.y - myP.y) <= radius) targetId = me;
     }
     if (!targetId) return;
-    const key = `${game.seq}:${game.it}->${targetId}`;
+    const fromId = game.it;
+    const key = `${game.seq}:${fromId}->${targetId}`;
     if (sentTouchKey === key && at - sentTouchAt < 150) return;
+    bankTime(at);
+    game.timeAsIt[targetId] = game.timeAsIt[targetId] || 0;
+    const preSeq = game.seq;
+    applyState({
+      it: targetId,
+      since: at,
+      immuneUntil: at + immuneMs,
+      immuneFrom: fromId,
+      timeAsIt: { ...game.timeAsIt },
+      seq: preSeq + 1,
+    });
+    // applyState clears sentTouchKey; re-arm so we don't spam touch while the host commits.
     sentTouchKey = key;
     sentTouchAt = at;
     const myP = positions.get(me);
-    touchAction({ from: game.it, to: targetId, seq: game.seq, by: me, x: myP?.x, y: myP?.y });
+    touchAction({ from: fromId, to: targetId, seq: preSeq, by: me, x: myP?.x, y: myP?.y });
   }
 
   function wrapPose(target) {
@@ -269,7 +289,12 @@ export function createTag(net, options = {}) {
       if (caller && Number.isFinite(data.x) && Number.isFinite(data.y)) {
         positions.set(caller, { x: data.x, y: data.y });
       }
-      tryTag(data.from, data.to);
+      // Host commits with one tag:state action. If the touch is rejected and the caller still
+      // thinks they handed off (optimistic seq), push the host's truth so they roll back.
+      if (tryTag(data.from, data.to)) return;
+      if (game.it && data.to && data.to !== game.it && Number(data.seq) === game.seq) {
+        broadcastState({ ...getStatePayload(), seq: game.seq + 1 });
+      }
     });
 
     if (typeof room.on === 'function') {
