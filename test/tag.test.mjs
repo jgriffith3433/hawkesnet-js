@@ -157,6 +157,41 @@ test('tag: 1 s tag-back immunity prevents immediate tag-back and tracks time per
   b.leave();
 });
 
+test('tag: the player with the least time as It is the round winner', async () => {
+  let clockMs = 80_000;
+  const now = () => clockMs;
+  const a = lobby({ name: 'Ada' });
+  const b = lobby({ name: 'Bob' });
+  const tagA = createTag(a, { now });
+  const tagB = createTag(b, { now });
+
+  a.join('tag-room-winner');
+  b.join('tag-room-winner');
+  await flush();
+
+  a.pose([0.2, 0.5, 0]);
+  b.pose([0.8, 0.5, 0]);
+  await flush();
+
+  // Ada is It for 900 ms, then tags Bob; Bob is It for 100 ms. Least time as It = Bob.
+  clockMs += 900;
+  tagA.move(0.8 - TAG_RADIUS * 0.5, 0.5);
+  await flush();
+  assert.equal(tagA.it, b.id);
+  clockMs += 100;
+
+  const times = { [a.id]: tagA.timeMs(a.id), [b.id]: tagA.timeMs(b.id) };
+  assert.equal(times[a.id], 900, 'Ada banked 900 ms as It');
+  assert.equal(times[b.id], 100, 'Bob has 100 ms as It');
+  const winner = times[a.id] <= times[b.id] ? a.id : b.id;
+  assert.equal(winner, b.id, 'least time as It wins the round');
+  assert.equal(tagB.timeMs(a.id), 900);
+  assert.equal(tagB.timeMs(b.id), 100);
+
+  a.leave();
+  b.leave();
+});
+
 test('tag: event-driven with no polling timers, wired into example/index.html and tools/demo.mjs', () => {
   const tagSrc = readFileSync(new URL('../example/tag.mjs', import.meta.url), 'utf8');
   assert.equal(/\bsetInterval\b|\bsetTimeout\b/.test(tagSrc), false, 'example/tag.mjs must not use polling timers');
@@ -167,4 +202,8 @@ test('tag: event-driven with no polling timers, wired into example/index.html an
 
   const demoToolSrc = readFileSync(new URL('../tools/demo.mjs', import.meta.url), 'utf8');
   assert.match(demoToolSrc, /'tag\.mjs'/, 'tools/demo.mjs copies example/tag.mjs into dist/');
+
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  assert.match(readme, /## Build a game: Tag/, 'README has Build a game: Tag');
+  assert.match(readme, /example\/tag\.mjs/, 'README links the example file');
 });

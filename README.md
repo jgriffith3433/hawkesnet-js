@@ -20,7 +20,7 @@ net.onPose((id, state) => moveAvatar(id, state.p, state.y));
 
 ## Recipes
 
-Four things most games need, each a short file you can paste, run live on the demo site's **Recipes** page and tested
+Things most games need, each a short file you can paste, run live on the demo site's **Recipes** page and tested
 by `npm test` (the tests run the files exactly as written):
 
 | Recipe | What it shows | Code |
@@ -29,6 +29,7 @@ by `npm test` (the tests run the files exactly as written):
 | Cursors | `pose` and `onPose`: every player's pointer, seen by the others | [`recipes/cursors.mjs`](recipes/cursors.mjs) |
 | Shared state | `sync.state` and `sync.action`: one score, the host holds the truth | [`recipes/shared-state.mjs`](recipes/shared-state.mjs) |
 | A room with a password | a room name made from the password, and what that does and doesn't protect | [`recipes/password-room.mjs`](recipes/password-room.mjs) |
+| Tag | a tiny game on those APIs: shared `It`, tag actions, host-owned rounds | [`recipes/tag.mjs`](recipes/tag.mjs) · full sample [`example/tag.mjs`](example/tag.mjs) |
 
 Chat in full:
 
@@ -43,6 +44,42 @@ net.when('status', ({ status }) => { if (status === 'online') net.send('chat', '
 
 A room with a password keeps friends together; it does not keep out someone who learns the room's name. For real access
 control your server hands out tickets (see `ticket` in the types).
+
+## Build a game: Tag
+
+The demo plays Tag. The readable sample is [`example/tag.mjs`](example/tag.mjs) (wired into `example/index.html`); the
+pasteable core is [`recipes/tag.mjs`](recipes/tag.mjs). On the Recipes page, **Run it here** on Tag opens the demo so two
+tabs can chase.
+
+Three SDK pieces do the work:
+
+**1. Shared state for who is It.** The host's copy of `{ it, since, immuneUntil, timeAsIt, seq }` goes to every peer and
+to late joiners:
+
+```js
+room.sync.state('tag', {
+  get: () => ({ it, since, immuneUntil, timeAsIt, seq }),
+  set: (s) => apply(s),
+});
+```
+
+**2. Actions for tags.** A touch is one `sync.action` so every screen applies the new It in the same flush (not on the
+next state tick):
+
+```js
+room.sync.action('tag:touch', (data, { authoritative }) => {
+  if (!authoritative) return;          // host decides
+  // …distance check, then:
+  room.sync.action('tag:state', apply)({ it: data.to, immuneUntil: at + 1000, seq: seq + 1, /* … */ });
+});
+```
+
+**3. Host for rounds.** Only the host picks the first It, accepts tags, and re-picks when It leaves. Time spent as It is
+banked per player id (`timeAsIt`); the player with the least time wins a round when you add a timer (the sample tracks
+the times; the demo draws the glow and the `It` label).
+
+Movement is ordinary `pose` / `onPose`. Open the demo twice to play; `npm test` runs the tag rules against
+`test/fake-net.mjs`.
 
 ## More
 

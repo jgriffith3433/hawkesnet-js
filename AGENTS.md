@@ -16,9 +16,11 @@ in the report. The same file lives in hawkesnet (`public/demo-playtest.mjs`) and
 
 **Phone:** under 700 px the demo page stacks (canvas, banner, players, quickstart; the page scrolls) and only the canvas moves the dot (pointer events, touch drag/tap). The `phone` scenario (`example/phone-playtest.mjs`) opens each page in a 390x844 frame and checks it; the smoke bot drags by touch when the page is stacked.
 
-**Recipes:** the four recipes (chat, cursors, shared state, a room with a password) are files in `recipes/`. The README, the
+**Recipes:** the recipes (chat, cursors, shared state, a room with a password, Tag) are files in `recipes/`. The README, the
 demo's `recipes.html` page and `npm test` (`test/`, which swaps only the import for `test/fake-net.mjs`) all use those exact
 files. To add one: put the file in `recipes/`, list it in `RECIPES` in `example/recipes.mjs`, and it is tested, linked and
 played by the `recipes` playtest scenario (`example/recipes-playtest.mjs`, passed to `net-playtest.mjs` as `scenarios`).
-Example files import `'../hawkes-net.mjs'`; `tools/demo.mjs` rewrites that for `dist/`, so a new example page or module
-must be copied there too. A "room with a password" is a room name made from the password, not access control (tickets are).
+Tag's entry sets `openDemo` so **Run it here** also opens the playable demo room. The full Tag sample is `example/tag.mjs`
+(copied into `dist/` by `tools/demo.mjs`). Example files import `'../hawkes-net.mjs'`; `tools/demo.mjs` rewrites that for
+`dist/`, so a new example page or module must be copied there too. A "room with a password" is a room name made from the
+password, not access control (tickets are).

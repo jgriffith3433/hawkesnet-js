@@ -39,7 +39,7 @@
 <main>
   <p class="muted"><a href="./index.html">← The demo</a></p>
   <h1><b>Hawkes</b> Net recipes</h1>
-  <p class="lead">Four things most multiplayer games need, each as code you can paste. They run here, live, on Hawkes Net's free test project
+  <p class="lead">Things most multiplayer games need, each as code you can paste — plus Tag, a tiny game built on them. They run here, live, on Hawkes Net's free test project
   <code>netdemo</code>; for your game, use your own project from <a href="https://net.hawkesgen.ai">net.hawkesgen.ai</a>.</p>
   <p class="lead" id="net"></p>
   <nav id="toc"></nav>
@@ -143,6 +143,12 @@
       run.disabled = true; run.textContent = 'Running (reload to stop)'; if (pw) pw.disabled = true;
       const lines = [];
       const log = (l) => { lines.push(l); out.textContent = lines.slice(-30).join('\n'); };
+      // Tag: open the demo's playable room (two tabs on that page chase); the recipe still runs and logs It here.
+      if (r.openDemo) {
+        const demo = new URL(r.openDemo, location.href);
+        log(`play: ${demo.pathname.replace(/^\//, '') || 'index.html'} (two-player Tag room)`);
+        try { window.open(demo.href, '_blank', 'noopener'); } catch { /* blocked: recipe log still runs */ }
+      }
       try { await runLive(r, { sdk, log, swap: pw ? [[`'${r.password}'`, JSON.stringify(pw.value)]] : [] }); }
       catch (e) { log('Error: ' + (e?.message || e)); }
     });
