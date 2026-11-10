@@ -23,6 +23,8 @@
 //     tolerance: 0.02,                                    // "the same place", in the page's units
 //     extra: async (c) => {},                             // optional more checks: c.check(name, fn), c.main, c.bot
 //     ready: () => true,                                  // optional: the page is ready to play (default: main() exists)
+//     afterTwoPlayers: async (c) => {},                   // optional: more two-players checks after the messages check; c has
+//                                                         // check, main, other, until, wait, metric, roundTrips, openBot, event, step
 //     scenarios: [{ id, title, seconds, tags, description,  // optional more scenarios of this page's own:
 //       run: async (c) => {} }],                          //   c.check(name, fn), c.until, c.wait, c.metric, c.progress
 //   });
@@ -236,6 +238,8 @@ export function installNetPlaytest(o) {
       metric('rttMs', ms);
       return `round trip ${ms} ms`;
     });
+    // A page with more to check between two players (its own game) adds it here.
+    if (o.afterTwoPlayers) await o.afterTwoPlayers({ check, main, other, until, wait, metric, roundTrips, openBot: o.openBot, event, step });
     progress(1);
     // Stay a little so the other browser can finish its own checks against this one.
     await wait(8000);
