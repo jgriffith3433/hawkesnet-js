@@ -364,7 +364,15 @@ net.join('quickstart');</pre>
   for (const t of ['pointerup', 'pointercancel']) addEventListener(t, (e) => { if (e.pointerId === activePointerId) activePointerId = null; });
   // For Studio's playtest: where this page's dot is, who is It, and whether the page is laid out as a phone (read-only).
   let drawnDots = [];
-  window.hawkesDemoView = () => ({ me: { ...me }, stacked: stacked(), version: VERSION, tag: tag.snapshot(), dots: drawnDots });
+  let loadN = 0, lastDraw = 0;
+  const frameMs = []; // recent frame-to-frame times
+  window.hawkesFrameStats = (reset = false) => {
+    if (reset) frameMs.length = 0;
+    const a = [...frameMs].sort((x, y) => x - y);
+    return { frames: a.length, p95FrameMs: a.length ? Math.round(a[Math.min(a.length - 1, Math.floor(a.length * 0.95))] * 10) / 10 : 0, avgFrameMs: a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 10) / 10 : 0 };
+  };
+  window.hawkesDemoLoad = (n) => { loadN = Math.max(0, Math.min(8, n | 0)); }; // named setup shortcut: n extra blobs
+  window.hawkesDemoView = () => ({ me: { ...me }, stacked: stacked(), version: VERSION, scene: { ...scene }, tag: tag.snapshot(), dots: drawnDots });
   setInterval(() => net.pose([me.x, me.y, 0]), 50);
 
   // Studio's playtest bot (net-playtest.mjs): a second player in this page, the dot moved by real pointer input.
@@ -600,6 +608,21 @@ net.join('quickstart');</pre>
         },
       }],
     extra: async ({ check, bot, until, wait, metric }) => {
+      await check('The arena is a lit backdrop with drifting fireflies, and a grid ripple spread when the second player joined', async () => {
+        const v = hawkesDemoView().scene;
+        if (!v.lit || v.fireflies < 10) throw new Error(`backdrop not lit or no fireflies: ${JSON.stringify(v)}`);
+        if (!(v.rippleTotal >= 1)) throw new Error('no grid ripple was started when the second player joined');
+        metric('fireflies', v.fireflies); metric('joinRipples', v.rippleTotal); metric('reducedMotion', v.reducedMotion ? 1 : 0);
+        return `${v.fireflies} fireflies, ${v.rippleTotal} join ripple(s)${v.reducedMotion ? ', reduced motion' : ''}`;
+      });
+      await check('Frame time stays under 20 ms (p95) with 4 players', async () => {
+        hawkesDemoLoad(2); await wait(300); hawkesFrameStats(true); await wait(2500);
+        const s = hawkesFrameStats(); hawkesDemoLoad(0);
+        metric('p95FrameMs', s.p95FrameMs);
+        if (s.frames < 30) throw new Error(`only ${s.frames} frames in 2.5 s`);
+        if (s.p95FrameMs > 20) throw new Error(`p95 frame time ${s.p95FrameMs} ms over ${s.frames} frames`);
+        return `p95 ${s.p95FrameMs} ms over ${s.frames} frames`;
+      });
       const readable = (n) => labelRects.length >= n && labelRects.every((l) => l.x >= areaL - 0.5 && l.y >= 0 && l.x + l.w <= canvasSize[0] && l.y + l.h <= canvasSize[1]) &&
         labelRects.every((a, i) => labelRects.every((b, j) => j <= i || !hit(a, b)));
       const meet = async (x, y) => { areaPointer(x, y); follow(at([x, y, 0])); await until(() => { const o = others.get(bot.id); return o && Math.hypot(o.x - x, o.y - y) < 0.02 && Math.hypot(me.x - x, me.y - y) < 0.02; }, 5000, `both players to be at ${x}, ${y}`); await wait(200); };
@@ -947,13 +970,55 @@ net.join('quickstart');</pre>
     });
   }
   // The shop window: a dark floor with a soft spotlight and a dotted grid, so the players are the only bright things on it.
-  function drawBackdrop(W, H, d) {
-    const bg = g.createRadialGradient(W / 2, H * 0.45, 0, W / 2, H * 0.45, Math.max(W, H) * 0.7);
-    bg.addColorStop(0, '#141b24'); bg.addColorStop(1, '#0b0f14');
+  // Sense of place: a lit floor (accent + link radial light, vignette), a grid that ripples outward when a player joins,
+  // slow fireflies and (in the loop) a glow under each blob. prefers-reduced-motion keeps the light and grid, stills the rest.
+  const reduceMq = matchMedia('(prefers-reduced-motion: reduce)');
+  const FIREFLIES = Array.from({ length: 26 }, (_, i) => ({ x: (i * 0.618034) % 1, y: (i * 0.381966 + 0.13) % 1, ph: i * 1.7, sp: 0.4 + (i % 5) * 0.12, r: 1.4 + (i % 3) * 0.7, warm: i % 3 === 0 }));
+  const ripples = []; // { x, y, t0 } in device px, t0 in ms
+  const pendingRipple = new Set();
+  const scene = { rippleCount: 0, fireflies: FIREFLIES.length, reducedMotion: reduceMq.matches, lit: true, glowBlobs: 0 };
+  net.when('peer:join', ({ peer }) => pendingRipple.add(peer.id));
+  const RIPPLE_MS = 1800;
+  function drawBackdrop(W, H, d, t, L) {
+    scene.reducedMotion = reduceMq.matches;
+    const mo = scene.reducedMotion ? 0 : 1, aw = W - L;
+    g.fillStyle = '#0b0f14'; g.fillRect(0, 0, W, H);
+    const cx = L + aw / 2, cy = H * 0.45, R = Math.max(aw, H) * 0.7;
+    const bg = g.createRadialGradient(cx, cy, 0, cx, cy, R);
+    bg.addColorStop(0, 'rgba(159,232,112,.13)'); bg.addColorStop(0.35, 'rgba(127,179,255,.07)'); bg.addColorStop(1, 'rgba(11,15,20,0)');
     g.fillStyle = bg; g.fillRect(0, 0, W, H);
-    g.fillStyle = 'rgba(167,175,187,.14)';
     const step = 40 * d;
-    for (let x = step / 2; x < W; x += step) for (let y = step / 2; y < H; y += step) g.fillRect(x, y, 2 * d, 2 * d);
+    g.fillStyle = 'rgba(167,175,187,.14)';
+    const live = ripples.filter((r) => t - r.t0 < RIPPLE_MS);
+    ripples.length = 0; ripples.push(...live);
+    scene.rippleCount = ripples.length;
+    for (let x = step / 2; x < W; x += step) for (let y = step / 2; y < H; y += step) {
+      let k = 0;
+      for (const r of ripples) {
+        const age = (t - r.t0) / RIPPLE_MS, ring = age * Math.max(W, H) * 0.9, dist = Math.hypot(x - r.x, y - r.y);
+        const w = Math.max(0, 1 - Math.abs(dist - ring) / (70 * d));
+        k = Math.max(k, w * (1 - age));
+      }
+      if (k > 0.01) { g.fillStyle = `rgba(159,232,112,${0.14 + 0.7 * k})`; g.fillRect(x - k * d, y - k * d, (2 + 2 * k) * d, (2 + 2 * k) * d); g.fillStyle = 'rgba(167,175,187,.14)'; }
+      else g.fillRect(x, y, 2 * d, 2 * d);
+    }
+    for (const f of FIREFLIES) {
+      const a = t / 1000 * f.sp * mo, px = L + (((f.x + Math.sin(a + f.ph) * 0.04 + 1) % 1) * aw), py = ((f.y + Math.cos(a * 0.8 + f.ph) * 0.05 + 1) % 1) * H;
+      const tw = 0.55 + 0.45 * Math.sin(t / 700 * mo + f.ph);
+      const col = f.warm ? '255,216,77' : '159,232,112';
+      g.fillStyle = `rgba(${col},${0.1 * tw})`; g.beginPath(); g.arc(px, py, f.r * 4 * d, 0, 6.2832); g.fill();
+      g.fillStyle = `rgba(${col},${0.35 + 0.5 * tw})`; g.beginPath(); g.arc(px, py, f.r * d, 0, 6.2832); g.fill();
+    }
+    const v = g.createRadialGradient(cx, H / 2, Math.min(aw, H) * 0.35, cx, H / 2, Math.max(aw, H) * 0.8);
+    v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.55)');
+    g.fillStyle = v; g.fillRect(L, 0, aw, H);
+  }
+  function drawGlow(o, d) {
+    const R = BLOB_R * d, gy = o.cy + R * 0.6;
+    g.save(); g.translate(o.cx, gy); g.scale(1, 0.4);
+    const gl = g.createRadialGradient(0, 0, 0, 0, 0, R * 2.2);
+    gl.addColorStop(0, o.color + '66'); gl.addColorStop(1, o.color + '00');
+    g.fillStyle = gl; g.beginPath(); g.arc(0, 0, R * 2.2, 0, 6.2832); g.fill(); g.restore();
   }
   function drawTrail(o, W, H, d, t, L) {
     const a = trails.get(o.key);
@@ -1056,7 +1121,8 @@ net.join('quickstart');</pre>
     const d = dpr();
     const L = areaLeft() * d; // the play area starts here (device pixels)
     areaL = L;
-    const cb = box(); c.width = Math.round(cb.width * d); c.height = Math.round(cb.height * d);
+    const cb = box(), cw = Math.round(cb.width * d), ch = Math.round(cb.height * d);
+    if (c.width !== cw) c.width = cw; if (c.height !== ch) c.height = ch; // resizing every frame reallocates the canvas
     const myName = name + ' (you)', meIt = tag.isIt(net.id);
     const dots = [{ key: 'me', id: net.id, cx: (L + me.x * (c.width - L)), cy: me.y * c.height, color: YOU, name: myName, label: tag.labelFor(net.id, myName), it: meIt }]; // you first: your label gets the best spot
     // Each blob follows its Track's point with a short ease (FOLLOW_MS): when the network hiccups and the Track corrects
@@ -1085,7 +1151,13 @@ net.join('quickstart');</pre>
       const o = others.get(glide.watch.id), n = tracks.get(glide.watch.id)?.newest?.v;
       if (o && n) glide.watch.frames.push({ t: performance.now(), x: o.x, y: o.y, nx: n[0], ny: n[1], packets: glide.packets });
     }
-    drawBackdrop(c.width, c.height, d);
+    for (let i = 0; i < loadN; i++) { // the playtest's load shortcut: extra blobs circling, to time the frame with a full room
+      const a = tNow / 1500 + i * 2.1;
+      dots.push({ key: 'load' + i, id: null, cx: L + (0.5 + 0.3 * Math.cos(a)) * (c.width - L), cy: (0.5 + 0.3 * Math.sin(a * 1.3)) * c.height, color: ['#ff8a80', '#7fb3ff', '#ffd84d'][i % 3], name: 'load' + i, label: 'load' + i, it: false });
+    }
+    for (const id of [...pendingRipple]) { const o = dots.find((x) => x.id === id); if (o) { ripples.push({ x: o.cx, y: o.cy, t0: tNow }); scene.rippleTotal = (scene.rippleTotal || 0) + 1; pendingRipple.delete(id); } }
+    drawBackdrop(c.width, c.height, d, tNow, L);
+    scene.glowBlobs = dots.length;
     for (const o of dots) trailPush(o.key, (o.cx - L) / (c.width - L), o.cy / c.height, tNow, justSet.delete(o.key));
     for (const o of dots) drawTrail(o, c.width, c.height, d, tNow, L);
     const pulse = 0.5 + 0.5 * Math.sin(tNow / 180);
@@ -1110,6 +1182,7 @@ net.join('quickstart');</pre>
         o.ringRadius = 0;
         o.glowing = false;
       }
+      drawGlow(o, d);
       drawBlob(o, d, tNow, st);
     }
     drawnDots = dots.map((o) => ({
@@ -1127,6 +1200,8 @@ net.join('quickstart');</pre>
     labelRects = labels.map((l) => ({ label: l.label, x: l.x, y: l.y, w: l.w, h: l.h, backed: !!l.backed }));
     canvasSize = [c.width, c.height];
     document.getElementById('count').textContent = `${net.peers.size + 1} here`;
+    if (lastDraw) { frameMs.push(tNow - lastDraw); if (frameMs.length > 600) frameMs.shift(); }
+    lastDraw = tNow;
     requestAnimationFrame(draw);
   })();
 </script>

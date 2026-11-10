@@ -283,6 +283,16 @@ export function phoneScenario({ pages }) {
         });
         c.progress(0.55);
 
+        await c.check('At 390 x 844 with 4 players the frame time stays under 20 ms (p95)', async () => {
+          win.hawkesDemoLoad(3); // you plus 3 blobs circling the room
+          await c.wait(300); win.hawkesFrameStats(true); await c.wait(3000);
+          const s = win.hawkesFrameStats(); win.hawkesDemoLoad(0);
+          c.metric('p95FrameMs', s.p95FrameMs);
+          if (s.frames < 30) throw new Error(`only ${s.frames} frames in 3 s`);
+          if (s.p95FrameMs > 20) throw new Error(`p95 frame time ${s.p95FrameMs} ms over ${s.frames} frames (limit 20)`);
+          return `p95 ${s.p95FrameMs} ms over ${s.frames} frames, 4 players`;
+        });
+
         await c.check(`All text on the demo page is at least ${MIN_TEXT_PX} px at 390 px`, async () => {
           if (!$('quick').open) $('quick').querySelector('summary').click();
           await c.wait(100);
