@@ -11,9 +11,95 @@ export function recipesScenario({ lobby, opts, pointer, sdk, hash }) {
   const lines = [];
   const logTo = (l) => lines.push(l);
   const online = (c, b, what) => c.until(() => b.ready, 15000, `${what} to be online`);
+  // What each recipe prints when it works, and the other player (if any) it needs to hear something.
+  const EXPECT = {
+    chat: { re: /you: hi, anyone here\?/ },
+    cursors: { re: /Bot is at 0\.70, 0\.20/, bot: (b) => setInterval(() => b.pose([0.7, 0.2, 0]), 300), area: 'recipe-cursors' },
+    'shared-state': { re: /score: \d+/ },
+    'password-room': { re: /Bot: hi from the vault/, bot: (b) => setInterval(() => b.send('chat', 'hi from the vault'), 700) },
+  };
+  const frames = [];
+  const open = (url, w, h) => new Promise((res, rej) => {
+    const f = document.createElement('iframe');
+    f.src = url; f.title = `Recipes page ${w} x ${h}`;
+    const scale = Math.min(1, innerWidth / w, (innerHeight - 24) / h);
+    f.style.cssText = `position:fixed;left:0;top:12px;width:${w}px;height:${h}px;border:2px solid #3a4150;background:#0b0f14;z-index:99990;transform-origin:top left;transform:scale(${scale})`;
+    f.addEventListener('load', () => res(f), { once: true });
+    f.addEventListener('error', () => rej(new Error(`could not open ${url}`)), { once: true });
+    document.body.append(f); frames.push(f);
+  });
+  const closeFrames = () => { while (frames.length) frames.pop().remove(); };
+
+  async function buttonsAndLinks(c) {
+    const page = new URL('./recipes.html', location.href).href;
+    const runAll = async (w, h, tagName) => {
+      let run = 0, passed = 0; const failed = [];
+      for (const r of RECIPES) {
+        const ex = EXPECT[r.id] ?? { re: /\S/ };
+        let timer = null, b = null;
+        const f = await open(page, w, h), d = f.contentDocument;
+        try {
+          await c.until(() => d.querySelector(`#${r.id} .run`) && d.querySelector(`#${r.id} pre.code`).textContent !== 'Loading…', 15000, `${r.title} to load at ${w}x${h}`);
+          if (ex.bot) { b = bot(ex.area ?? `vault-${(await hash(`my-game/${r.password}`)).slice(0, 16)}`); await online(c, b, 'the other player'); timer = ex.bot(b); }
+          const btn = d.querySelector(`#${r.id} .run`), out = d.querySelector(`#${r.id} pre.out`);
+          btn.click(); run++;
+          try { await c.until(() => ex.re.test(out.textContent), 5000, `${r.title} to print its result`); passed++; }
+          catch { failed.push(`${r.title} (printed: ${JSON.stringify(out.textContent.slice(-80))})`); }
+          await c.wait(400);
+        } finally { clearInterval(timer); if (b) { try { b.leave(); } catch { /* gone */ } } f.remove(); frames.splice(frames.indexOf(f), 1); }
+      }
+      return { run, passed, failed, tagName };
+    };
+    await c.check('Run it here on every recipe prints its result within 5 s (1280x720)', async () => {
+      const r = await runAll(1280, 720, 'desktop');
+      c.metric('recipesRun', r.run); c.metric('recipesPassed', r.passed);
+      if (r.run !== RECIPES.length) throw new Error(`pressed ${r.run} of ${RECIPES.length}`);
+      if (r.failed.length) throw new Error(`no result in 5 s: ${r.failed.join('; ')}`);
+      return `${r.passed} of ${r.run} recipes passed`;
+    });
+    c.progress(0.92);
+    await c.check('The same at phone size (390x844)', async () => {
+      const r = await runAll(390, 844, 'phone');
+      c.metric('recipesPassedPhone', r.passed);
+      if (r.failed.length) throw new Error(`no result in 5 s: ${r.failed.join('; ')}`);
+      return `${r.passed} of ${r.run} recipes passed`;
+    });
+    c.progress(0.97);
+    await c.check('Every link on the demo and recipes pages answers without leaving the site', async () => {
+      const f = await open(page, 1280, 720);
+      await c.until(() => f.contentDocument.querySelectorAll('#toc a, section.recipe').length >= RECIPES.length * 2, 15000, 'the recipes page to build its links');
+      const docs = { [new URL('./recipes.html', location.href).href]: f.contentDocument };
+      const demoUrl = new URL('./index.html', location.href).href;
+      docs[demoUrl] = new DOMParser().parseFromString(await (await fetch(demoUrl)).text(), 'text/html');
+      const cache = new Map(), broken = []; let checked = 0, external = 0;
+      for (const [from, doc] of Object.entries(docs)) {
+        for (const a of doc.querySelectorAll('a[href]')) {
+          const raw = a.getAttribute('href'); if (/^(mailto:|javascript:)/.test(raw)) continue;
+          const u = new URL(raw, from);
+          if (u.origin !== location.origin) { external++; continue; }
+          checked++;
+          const key = u.origin + u.pathname;
+          if (!cache.has(key)) cache.set(key, fetch(key).then(async (res) => ({ ok: res.ok, status: res.status, html: res.ok && /html/.test(res.headers.get('content-type') || '') ? await res.text() : '' }), () => ({ ok: false, status: 'unreachable', html: '' })));
+          const got = await cache.get(key);
+          if (!got.ok) { broken.push(`${raw} (${got.status})`); continue; }
+          if (u.hash) {
+            const id = decodeURIComponent(u.hash.slice(1));
+            const live = docs[key]; // the recipes page builds its sections in script
+            const has = live ? live.getElementById(id) : new DOMParser().parseFromString(got.html, 'text/html').getElementById(id);
+            if (!has) broken.push(`${raw} (no #${id})`);
+          }
+        }
+      }
+      closeFrames();
+      c.metric('linksChecked', checked); c.metric('linksBroken', broken.length); c.metric('linksExternalSkipped', external);
+      if (broken.length) throw new Error(`broken: ${broken.join('; ')}`);
+      return `${checked} links answer, ${external} external ones to other sites not followed`;
+    });
+  }
+
   return {
-    id: 'recipes', title: 'Each recipe has a live link and plays between two players', seconds: 110, tags: ['full', 'docs'],
-    description: 'Checks the demo links to the four recipes (chat, cursors, shared state, a room with a password), that each shows its code, and plays each one live with a second player: a message both ways, a cursor moved by pointer input, a shared score, and a password room that a wrong password does not reach.',
+    id: 'recipes', title: 'Each recipe has a live link and plays between two players', seconds: 190, tags: ['full', 'docs'],
+    description: 'Checks the demo links to the four recipes (chat, cursors, shared state, a room with a password), that each shows its code, and plays each one live with a second player: a message both ways, a cursor moved by pointer input, a shared score, and a password room that a wrong password does not reach. Then opens the recipes page at 1280x720 and at 390x844, presses Run it here on every recipe and expects each to print its result within 5 s, and checks every link on the demo and recipes pages answers (recipesRun, recipesPassed, linksBroken).',
     run: async (c) => {
       try {
         await c.check('The demo links to all four recipes', async () => {
@@ -94,7 +180,9 @@ export function recipesScenario({ lobby, opts, pointer, sdk, hash }) {
           } finally { h.stop(); }
           return 'the right room heard it, the wrong room heard nothing';
         });
-      } finally { for (const b of bots) { try { b.leave(); } catch { /* gone */ } } }
+        c.progress(0.85);
+        await buttonsAndLinks(c);
+      } finally { closeFrames(); for (const b of bots) { try { b.leave(); } catch { /* gone */ } } }
     },
   };
 }
