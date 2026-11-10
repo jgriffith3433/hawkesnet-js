@@ -46,9 +46,11 @@
     #hud small, #players .kind, #players h2, #recipes h2 { font-size: 14px; }
     #recipe-links a { padding: 4px 0; }
     #quick { position: static; margin: 8px 12px 16px; max-width: none; max-height: none; overflow: visible; font-size: 15px; }
-    #quick p, #quick summary, #hud, #side .card { overflow-wrap: anywhere; }
+    #quick code { font-size: 13px; }
+    #quick p, #quick summary, #hud, #banner, #side .card { overflow-wrap: anywhere; }
     #quick pre { font-size: 13px; max-height: 40vh; }
     #quick button { padding: 8px 14px; }
+    #hawkes-net-playtest { left: 8px !important; right: 8px !important; top: auto !important; bottom: 8px !important; max-width: none !important; max-height: 36vh; overflow: hidden; box-sizing: border-box; }
   }
 </style>
 </head>
@@ -262,18 +264,18 @@ net.join('quickstart');</pre>
   renderBanner('start');
   // The dot follows the pointer. On a wide window that is the mouse anywhere over the page. On a phone the page scrolls, so
   // only the canvas moves it: the mouse over it, or a finger (or pen) pressed on it and dragged or tapped (pointer events).
-  let pressed = false;
+  let activePointerId = null;
   const move = (e) => {
-    if (stacked() && !(e.target === c && (e.pointerType === 'mouse' || pressed))) return;
+    if (stacked() && !(e.pointerId === activePointerId || (e.target === c && e.pointerType === 'mouse'))) return;
     const b = box(), L = areaLeft();
     me.x = Math.max(0, Math.min(1, (e.clientX - b.left - L) / (b.width - L))); me.y = Math.max(0, Math.min(1, (e.clientY - b.top) / b.height));
   };
   addEventListener('pointermove', move);
   addEventListener('pointerdown', (e) => {
-    if (e.target === c) { pressed = true; try { c.setPointerCapture(e.pointerId); } catch { /* a synthetic pointer */ } }
+    if (e.target === c) { activePointerId = e.pointerId; try { c.setPointerCapture(e.pointerId); } catch { /* a synthetic pointer */ } }
     move(e);
   });
-  for (const t of ['pointerup', 'pointercancel']) addEventListener(t, () => { pressed = false; });
+  for (const t of ['pointerup', 'pointercancel']) addEventListener(t, (e) => { if (e.pointerId === activePointerId) activePointerId = null; });
   // For Studio's playtest: where this page's dot is and whether the page is laid out as a phone (read-only).
   window.hawkesDemoView = () => ({ me: { ...me }, stacked: stacked(), version: VERSION });
   setInterval(() => net.pose([me.x, me.y, 0]), 50);
@@ -518,12 +520,13 @@ net.join('quickstart');</pre>
             const b = li.getBoundingClientRect();
             if (b.height < 1 || b.bottom > innerHeight || b.top < 0) throw new Error(`row "${li.textContent}" is off screen`);
             for (const [x, y] of [[b.left + 4, b.top + 3], [b.right - 4, b.bottom - 3]]) {
-              const top = document.elementFromPoint(x, y);
+              let top = document.elementFromPoint(x, y);
+              if (top?.hasAttribute?.('data-hawkes-report')) top = document.elementsFromPoint(x, y).find((e) => !e.hasAttribute?.('data-hawkes-report')) ?? null;
               if (!top || !li.contains(top)) throw new Error(`row "${li.querySelector('.nm').textContent}" is covered by ${top ? (top.id ? '#' + top.id : top.tagName) : 'nothing'}`);
             }
           }
           const q = document.getElementById('quick').getBoundingClientRect(), s = side.getBoundingClientRect();
-          if (stacked()) return `${lis.length} rows visible, stacked under the canvas`;
+          if (stacked()) { scrollTo(0, 0); return `${lis.length} rows visible, stacked under the canvas`; }
           if (q.left < s.right) throw new Error('the quickstart panel overlaps the side column');
           return `${lis.length} rows visible, quickstart starts at x=${Math.round(q.left)}, side ends at x=${Math.round(s.right)}`;
         });
