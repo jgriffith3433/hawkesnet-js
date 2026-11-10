@@ -133,12 +133,13 @@ net.join('quickstart');</pre>
 <script type="module">
   // The SDK from this folder (npm: import { lobby } from '@hawkesgen/net'). ?net= another Hawkes Net (an origin);
   // ?project= your project. On a Studio beta site the page names beta Hawkes Net (window.HAWKES_NET_ENDPOINT).
-  let lobby, VERSION, Track, installNetPlaytest, recipesScenario, phoneScenario;
+  let lobby, VERSION, Track, installNetPlaytest, recipesScenario, phoneScenario, createTag;
   try {
     ({ lobby, VERSION, Track } = await import('../hawkes-net.mjs'));
     ({ installNetPlaytest } = await import('./net-playtest.mjs'));
     ({ recipesScenario } = await import('./recipes-playtest.mjs'));
     ({ phoneScenario } = await import('./phone-playtest.mjs'));
+    ({ createTag } = await import('./tag.mjs'));
   } catch (e) {
     await window.__hawkesDemoBoot.fail(e);
     throw e;
@@ -152,6 +153,8 @@ net.join('quickstart');</pre>
   // Only name an endpoint when asked: an endpoint given as undefined would override the SDK's default.
   const opts = { project: q.get('project') || 'netdemo', transport: 'relay', ...(endpoint ? { endpoint } : {}) };
   const net = lobby({ ...opts, name });
+  const tag = createTag(net);
+  window.hawkesTag = tag;
   net.join('js-demo');
   const c = document.getElementById('c'), g = c.getContext('2d');
   const me = { x: 0.5, y: 0.5 };
@@ -269,6 +272,7 @@ net.join('quickstart');</pre>
     if (stacked() && !(e.pointerId === activePointerId || (e.target === c && e.pointerType === 'mouse'))) return;
     const b = box(), L = areaLeft();
     me.x = Math.max(0, Math.min(1, (e.clientX - b.left - L) / (b.width - L))); me.y = Math.max(0, Math.min(1, (e.clientY - b.top) / b.height));
+    tag.move(me.x, me.y);
   };
   addEventListener('pointermove', move);
   addEventListener('pointerdown', (e) => {
@@ -276,22 +280,169 @@ net.join('quickstart');</pre>
     move(e);
   });
   for (const t of ['pointerup', 'pointercancel']) addEventListener(t, (e) => { if (e.pointerId === activePointerId) activePointerId = null; });
-  // For Studio's playtest: where this page's dot is and whether the page is laid out as a phone (read-only).
-  window.hawkesDemoView = () => ({ me: { ...me }, stacked: stacked(), version: VERSION });
+  // For Studio's playtest: where this page's dot is, who is It, and whether the page is laid out as a phone (read-only).
+  let drawnDots = [];
+  window.hawkesDemoView = () => ({ me: { ...me }, stacked: stacked(), version: VERSION, tag: tag.snapshot(), dots: drawnDots });
   setInterval(() => net.pose([me.x, me.y, 0]), 50);
 
   // Studio's playtest bot (net-playtest.mjs): a second player in this page, the dot moved by real pointer input.
+  let botTag = null, inTagPlaytest = false;
   const pointer = (x, y) => dispatchEvent(new PointerEvent('pointermove', { clientX: x * innerWidth, clientY: y * innerHeight, bubbles: true })); // the page's own width (the recipes scenario)
   const areaPointer = (x, y) => c.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'mouse', clientX: areaPx(x), clientY: yPx(y), bubbles: true })); // 0..1 over the play area
   // A finger on a phone: press on the canvas, drag, lift (pointer events with pointerType 'touch').
   const touch = (type, x, y) => c.dispatchEvent(new PointerEvent(type, { pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: areaPx(x), clientY: yPx(y), bubbles: true, cancelable: true }));
-  const drag = async (step) => { touch('pointerdown', 0.2, 0.3); for (let i = 0; i <= 30; i++) { touch('pointermove', 0.2 + i * 0.02, 0.3 + Math.sin(i / 5) * 0.1); await step(60); } touch('pointerup', 0.8, 0.3); };
+  const moveInput = (x, y) => {
+    if (stacked()) {
+      if (activePointerId === null) touch('pointerdown', x, y);
+      else touch('pointermove', x, y);
+    } else areaPointer(x, y);
+  };
+  const drag = async (step) => { touch('pointerdown', 0.2, 0.3); for (let i = 0; i <= 30 && !inTagPlaytest; i++) { touch('pointermove', 0.2 + i * 0.02, 0.3 + Math.sin(i / 5) * 0.1); await step(60); } touch('pointerup', me.x, me.y); };
+  const runTagChecks = async ({ check, until, wait, metric, event, step = wait, peerId, bot = null, follow = null }) => {
+    const steerMe = async (tx, ty, steps = 12, dt = 25) => {
+      const sx = me.x, sy = me.y;
+      for (let i = 1; i <= steps; i++) {
+        const u = i / steps;
+        moveInput(sx + (tx - sx) * u, sy + (ty - sy) * u);
+        await step(dt);
+      }
+    };
+    const myHome = (net.id || '') < peerId ? [0.3, 0.5] : [0.7, 0.5];
+    const peerHome = (net.id || '') < peerId ? [0.7, 0.5] : [0.3, 0.5];
+    if (follow) follow(() => [peerHome[0], peerHome[1], 0]);
+    else if (bot) bot.pose([peerHome[0], peerHome[1], 0], 0);
+    await steerMe(myHome[0], myHome[1], 8, 25);
+    await until(() => {
+      const o = others.get(peerId);
+      return o && Math.hypot(me.x - o.x, me.y - o.y) > tag.RADIUS * 2.2 && !tag.isImmune() && Boolean(tag.it) && tag.agreedWith(peerId);
+    }, 6000, 'both players to stand apart and agree on who is It');
+
+    let initialIt = null, targetId = null;
+    await check('One player glows as It on both screens', async () => {
+      await until(() => {
+        if (!tag.it || !tag.agreedWith(peerId)) return false;
+        if (bot && botTag && botTag.it !== tag.it) return false;
+        const itDot = drawnDots.find((d) => d.id === tag.it);
+        const otherDot = drawnDots.find((d) => d.id && d.id !== tag.it);
+        return Boolean(itDot?.glowing && itDot.ringRadius > 12 && itDot.label === 'It' && otherDot && !otherDot.glowing);
+      }, 4000, 'one player to glow as It with label "It" and both screens to agree');
+      initialIt = tag.it;
+      targetId = initialIt === net.id ? peerId : net.id;
+      const itDot = drawnDots.find((d) => d.id === initialIt);
+      metric('tagInitialIt', initialIt === net.id ? 'self' : 'peer');
+      event?.('tag:it', initialIt);
+      return `${initialIt} glows as It on both screens (label "${itDot.label}", ring ${Math.round(itDot.ringRadius)} px)`;
+    });
+
+    await check('Touching another player passes It on both screens within a third of a second', async () => {
+      let tTouch = 0;
+      const markTouch = () => {
+        if (!tTouch && (tag.distanceTo(peerId) <= tag.RADIUS || tag.it === targetId)) tTouch = performance.now();
+      };
+      if (initialIt === net.id) {
+        const peerSpot = () => { const o = others.get(peerId); return o ? [o.x, o.y] : peerHome; };
+        const sx = me.x, sy = me.y;
+        for (let i = 1; i <= 16 && tag.it === initialIt && !tTouch; i++) {
+          const [tx, ty] = peerSpot(), u = i / 16;
+          moveInput(sx + (tx - sx) * u, sy + (ty - sy) * u);
+          markTouch();
+          if (!tTouch) await step(25);
+          markTouch();
+        }
+        if (!tTouch) {
+          const [tx, ty] = peerSpot();
+          moveInput(tx, ty);
+          markTouch();
+        }
+      } else if (bot) {
+        const [sx, sy] = peerHome;
+        for (let i = 1; i <= 16 && tag.it === initialIt && !tTouch; i++) {
+          const u = i / 16, p = [sx + (me.x - sx) * u, sy + (me.y - sy) * u, 0];
+          if (follow) follow(() => p);
+          bot.pose(p, 0);
+          markTouch();
+          if (!tTouch) await step(25);
+          markTouch();
+        }
+      } else {
+        const waitStart = performance.now();
+        while (!tTouch && tag.it === initialIt && performance.now() - waitStart < 2200) {
+          moveInput(myHome[0], myHome[1]);
+          markTouch();
+          if (!tTouch) await step(25);
+          markTouch();
+        }
+        if (!tTouch && tag.it === initialIt) {
+          const o = others.get(peerId) || { x: peerHome[0], y: peerHome[1] };
+          const sx = me.x, sy = me.y;
+          for (let i = 1; i <= 14 && tag.it === initialIt && !tTouch; i++) {
+            const u = i / 14;
+            moveInput(sx + (o.x - sx) * u, sy + (o.y - sy) * u);
+            markTouch();
+            if (!tTouch) await step(25);
+            markTouch();
+          }
+        }
+      }
+      tTouch ||= performance.now();
+      await until(() => {
+        if (tag.it !== targetId || !tag.agreedWith(peerId)) return false;
+        if (bot && botTag && botTag.it !== targetId) return false;
+        return true;
+      }, 2000, () => `It to pass from ${initialIt} to ${targetId} on both screens (now ${tag.it}, peer sees ${tag.peerIt(peerId)})`);
+      const passMs = Math.max(1, Math.round(performance.now() - tTouch));
+      await until(() => {
+        const d = drawnDots.find((x) => x.id === targetId);
+        return Boolean(d?.glowing && d.label === 'It');
+      }, 1000, 'the new It player to glow on the canvas');
+      metric('tagPassMs', passMs);
+      event?.('tag:passed', `${initialIt}->${targetId}:${passMs}ms`);
+      if (passMs > 300) throw new Error(`It took ${passMs} ms to pass on both screens (must be <= 300 ms)`);
+      return `It passed from ${initialIt} to ${targetId} on both screens in ${passMs} ms`;
+    });
+
+    await check('Right after a tag, the new It cannot tag straight back for a second', async () => {
+      if (!tag.isImmune()) throw new Error('expected tag-back immunity to be active right after the tag');
+      const contact = others.get(peerId) ? [others.get(peerId).x, others.get(peerId).y] : [me.x, me.y];
+      for (let i = 0; i < 6 && tag.immuneUntil - net.now() > 350; i++) {
+        const dx = (i % 2 === 0 ? 1 : -1) * 0.004;
+        moveInput(Math.max(0.05, Math.min(0.95, contact[0] + dx)), contact[1]);
+        if (bot) {
+          const p = [contact[0], contact[1], 0];
+          if (follow) follow(() => p);
+          bot.pose(p, 0);
+        }
+        if (tag.it !== targetId) throw new Error(`It tagged straight back to ${tag.it} while immunity still had ${Math.round(tag.immuneUntil - net.now())} ms left`);
+        await step(45);
+      }
+      if (follow) follow(() => [peerHome[0], peerHome[1], 0]);
+      else if (bot) bot.pose([peerHome[0], peerHome[1], 0], 0);
+      await steerMe(myHome[0], myHome[1], 6, 25);
+      await until(() => !tag.isImmune(), 1600, 'the 1 s tag-back immunity window to complete');
+      if (tag.it !== targetId || !tag.agreedWith(peerId)) throw new Error(`expected ${targetId} to still be It on both screens after immunity (got ${tag.it})`);
+      const prevTime = Math.round(tag.timeMs(initialIt)), newTime = Math.round(tag.timeMs(targetId));
+      if (prevTime <= 0 || newTime < 900) throw new Error(`expected time spent as It to be tracked per player id (got ${initialIt}=${prevTime} ms, ${targetId}=${newTime} ms)`);
+      metric('tagImmuneMs', tag.IMMUNE_MS);
+      metric('tagTimeAsItMs', newTime);
+      event?.('tag:immune-held', targetId);
+      if (stacked() && activePointerId !== null) touch('pointerup', me.x, me.y);
+      return `${targetId} stayed It through ${tag.IMMUNE_MS} ms immunity; time as It: ${prevTime} ms / ${newTime} ms`;
+    });
+  };
   installNetPlaytest({
     product: 'hawkes-net-js',
     where: (endpoint || globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, ''),
     main: () => net,
-    openBot: async () => { const b = lobby({ ...opts, name: 'Playtest bot', log: false }); b.join('js-demo'); return b; },
-    drive: async (step) => { if (stacked()) return drag(step); for (let i = 0; i <= 30; i++) { areaPointer(0.2 + i * 0.02, 0.3 + Math.sin(i / 5) * 0.1); await step(60); } }, // a phone: by touch
+    openBot: async () => { const b = lobby({ ...opts, name: 'Playtest bot', log: false }); botTag = createTag(b); b.join('js-demo'); return b; },
+    drive: async (step) => { if (inTagPlaytest) { await step(100); return; } if (stacked()) return drag(step); for (let i = 0; i <= 30 && !inTagPlaytest; i++) { areaPointer(0.2 + i * 0.02, 0.3 + Math.sin(i / 5) * 0.1); await step(60); } }, // a phone: by touch
+    afterTwoPlayers: async ({ check, other, until, wait, metric, event, step }) => {
+      inTagPlaytest = true;
+      try {
+        await runTagChecks({ check, until, wait, metric, event, step, peerId: other });
+      } finally {
+        inTagPlaytest = false;
+      }
+    },
     myPos: () => [me.x, me.y, 0],
     shownPos: (id) => { const o = others.get(id); return o ? [o.x, o.y, 0] : null; },
     botPose: (u) => [0.25 + 0.5 * u, 0.75, 0],
@@ -589,6 +740,7 @@ net.join('quickstart');</pre>
           if (me.x !== 0) throw new Error(`the pointer over the panels put the dot at ${me.x}, not at the edge of the play area`);
           return `far left of the page keeps the dot at x=${Math.round(L)}, panels end at x=${Math.round(pe.right)}`;
         });
+        await runTagChecks({ check, until, wait, metric, step: wait, peerId: bot.id, bot, follow });
       } finally { clearInterval(feed); }
     },
   });
@@ -653,25 +805,39 @@ net.join('quickstart');</pre>
   // The side list: one row per player, with their colour and how their link to you runs. Rebuilt only when something in it changes.
   const listEl = document.getElementById('plist'), listN = document.getElementById('players-n');
   let listSig = '';
-  const kindOf = (id) => {
+  const kindOf = (id, it = false) => {
     const t = net.room?.transport;
-    if (id === 'me') return t === 'p2p' ? 'You · peer to peer' : t === 'relay' ? 'You · Hawkes relay' : 'You';
-    const route = net.peers.get(id)?.route;
-    return route === 'relay' ? 'Hawkes relay' : route === 'host' ? 'Peer to peer' : route === 'direct' ? 'Peer to peer' : 'Connecting';
+    const base = id === 'me'
+      ? (t === 'p2p' ? 'You · peer to peer' : t === 'relay' ? 'You · Hawkes relay' : 'You')
+      : (() => {
+          const route = net.peers.get(id)?.route;
+          return route === 'relay' ? 'Hawkes relay' : route === 'host' ? 'Peer to peer' : route === 'direct' ? 'Peer to peer' : 'Connecting';
+        })();
+    return it ? `${base} · It` : base;
   };
   function renderList(dots) {
-    const rows = dots.map((o) => ({ key: o.key, label: o.label, color: o.color, kind: kindOf(o.key) }));
+    const rows = dots.map((o) => ({ key: o.key, name: o.name, color: o.color, kind: kindOf(o.key, o.it), it: o.it }));
     const sig = JSON.stringify(rows);
     if (sig === listSig) return;
     listSig = sig;
-    listEl.textContent = '';
+    const byKey = new Map([...listEl.children].map((li) => [li.dataset.key, li]));
+    const keep = new Set();
     for (const r of rows) {
-      const li = document.createElement('li'); li.dataset.color = r.color; li.dataset.kind = r.kind;
-      const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = r.color;
-      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = r.label;
-      const kd = document.createElement('span'); kd.className = 'kind'; kd.textContent = r.kind;
-      li.append(sw, nm, kd); listEl.append(li);
+      keep.add(r.key);
+      let li = byKey.get(r.key);
+      if (!li) {
+        li = document.createElement('li'); li.dataset.key = r.key;
+        const sw = document.createElement('span'); sw.className = 'sw';
+        const nm = document.createElement('span'); nm.className = 'nm';
+        const kd = document.createElement('span'); kd.className = 'kind';
+        li.append(sw, nm, kd); listEl.append(li);
+      }
+      li.dataset.color = r.color; li.dataset.kind = r.kind; li.dataset.it = r.it ? '1' : '0';
+      li.querySelector('.sw').style.background = r.color;
+      li.querySelector('.nm').textContent = r.name;
+      li.querySelector('.kind').textContent = r.kind;
     }
+    for (const [k, li] of byKey) if (!keep.has(k)) li.remove();
     listN.textContent = String(rows.length);
   }
   (function draw() {
@@ -679,7 +845,8 @@ net.join('quickstart');</pre>
     const L = areaLeft() * d; // the play area starts here (device pixels)
     areaL = L;
     const cb = box(); c.width = Math.round(cb.width * d); c.height = Math.round(cb.height * d);
-    const dots = [{ key: 'me', cx: (L + me.x * (c.width - L)), cy: me.y * c.height, color: YOU, label: name + ' (you)' }]; // you first: your label gets the best spot
+    const myName = name + ' (you)', meIt = tag.isIt(net.id);
+    const dots = [{ key: 'me', id: net.id, cx: (L + me.x * (c.width - L)), cy: me.y * c.height, color: YOU, name: myName, label: tag.labelFor(net.id, myName), it: meIt }]; // you first: your label gets the best spot
     // Each dot follows its Track's point with a short ease (FOLLOW_MS): when the network hiccups and the Track corrects
     // its guess, the dot slides there over a few frames instead of jumping.
     const tNow = performance.now(), ease = 1 - Math.exp(-(tNow - lastFrame) / FOLLOW_MS);
@@ -698,7 +865,8 @@ net.join('quickstart');</pre>
         if (len > cap) { dx *= cap / len; dy *= cap / len; }
         o.x += dx; o.y += dy;
       }
-      dots.push({ key: id, cx: L + o.x * (c.width - L), cy: o.y * c.height, color: colorFor(id), label: p.name || id });
+      const peerName = p.name || id, peerIt = tag.isIt(id);
+      dots.push({ key: id, id, cx: L + o.x * (c.width - L), cy: o.y * c.height, color: colorFor(id), name: peerName, label: tag.labelFor(id, peerName), it: peerIt });
     }
     // The playtest's frame log for one player: where each frame drew it, when, and how many poses had landed by then.
     if (glide.watch) {
@@ -708,11 +876,31 @@ net.join('quickstart');</pre>
     drawBackdrop(c.width, c.height, d);
     for (const o of dots) trailPush(o.key, (o.cx - L) / (c.width - L), o.cy / c.height, tNow, justSet.delete(o.key));
     for (const o of dots) drawTrail(o, c.width, c.height, d, tNow, L);
+    const pulse = 0.5 + 0.5 * Math.sin(tNow / 180);
     for (const o of dots) {
-      g.fillStyle = o.color; g.shadowColor = o.color; g.shadowBlur = 14 * d;
+      if (o.it) {
+        const ringR = (18 + 6 * pulse) * d;
+        g.save();
+        g.beginPath();
+        g.arc(o.cx, o.cy, ringR, 0, Math.PI * 2);
+        g.strokeStyle = o.color;
+        g.globalAlpha = 0.55 + 0.35 * pulse;
+        g.lineWidth = (2.5 + 1.5 * pulse) * d;
+        g.shadowColor = o.color;
+        g.shadowBlur = (22 + 12 * pulse) * d;
+        g.stroke();
+        g.restore();
+        o.ringRadius = ringR / d;
+        o.glowing = true;
+      } else {
+        o.ringRadius = 0;
+        o.glowing = false;
+      }
+      g.fillStyle = o.color; g.shadowColor = o.color; g.shadowBlur = (o.it ? 24 : 14) * d;
       g.beginPath(); g.arc(o.cx, o.cy, 12 * d, 0, Math.PI * 2); g.fill();
       g.shadowBlur = 0; g.lineWidth = 2 * d; g.strokeStyle = 'rgba(11,15,20,.9)'; g.stroke();
     }
+    drawnDots = dots.map((o) => ({ key: o.key, id: o.id, label: o.label, name: o.name, color: o.color, it: o.it, glowing: o.glowing, ringRadius: o.ringRadius }));
     renderList(dots);
     const labels = layoutLabels(dots, c.width, c.height, d, L);
     g.textBaseline = 'middle';
