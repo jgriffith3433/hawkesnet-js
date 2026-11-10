@@ -207,3 +207,23 @@ test('tag: event-driven with no polling timers, wired into example/index.html an
   assert.match(readme, /## Build a game: Tag/, 'README has Build a game: Tag');
   assert.match(readme, /example\/tag\.mjs/, 'README links the example file');
 });
+
+test('demo head stub lists real scenarios and hands off start() after installNetPlaytest', () => {
+  const indexSrc = readFileSync(new URL('../example/index.html', import.meta.url), 'utf8');
+  const stub = indexSrc.match(/<script>\s*\/\/ Playtest stub[\s\S]*?<\/script>/);
+  assert.ok(stub, 'inline playtest stub script exists before the module');
+  const stubSrc = stub[0];
+  const modIdx = indexSrc.indexOf('<script type="module">');
+  assert.ok(indexSrc.indexOf(stubSrc) < modIdx, 'stub is before <script type="module">');
+  assert.match(stubSrc, /__stub:\s*true/);
+  assert.match(stubSrc, /id:\s*'smoke'/);
+  assert.match(stubSrc, /id:\s*'two-players'/);
+  assert.match(stubSrc, /id:\s*'phone'/);
+  assert.match(stubSrc, /id:\s*'recipes'/);
+  assert.match(stubSrc, /id:\s*'demo-boot'/);
+  assert.equal(/scenarios:\s*function\s*\(\)\s*\{\s*return\s*\[\];\s*\}/.test(stubSrc), false, 'stub must not return []');
+  assert.match(stubSrc, /takePending/);
+  assert.match(stubSrc, /pending\s*=\s*\{\s*id:/);
+  assert.match(indexSrc, /__hawkesDemoBoot\.takePending/);
+  assert.match(indexSrc, /upgradedAt\s*=\s*performance\.now\(\)/);
+});

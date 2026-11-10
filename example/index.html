@@ -77,17 +77,38 @@ net.join('quickstart');</pre>
 <pre id="qs-out" aria-live="polite"></pre>
 </details>
 <script>
-  // Playtest stub at once (Studio sees it while the module loads), then recover if the SDK import fails because this
-  // page was opened deeper than the site root: probe demo-root.json a few steps up and replace to that root.
+  // Playtest stub at once (Studio reads scenarios() as soon as hawkesPlaytest exists, before the module finishes its
+  // await imports). List the real static scenarios here — never [] — and hand off start(id) once installNetPlaytest runs.
+  // Also recover if the SDK import fails because this page was opened deeper than the site root: probe demo-root.json
+  // a few steps up and replace to that root; otherwise set stub.err and show a plain error card.
   (function () {
-    var err = null, gone = false, tried = Object.create(null);
+    var hookAt = performance.now(), err = null, gone = false, busy = false, pending = null, tried = Object.create(null);
+    // Keep in sync with installNetPlaytest (smoke, two-players) + phone / recipes / demo-boot on this page.
+    var stubScenarios = [
+      { id: 'smoke', title: 'Two players in one page meet in a room, move, message and leave', seconds: 45, tags: ['smoke'] },
+      { id: 'two-players', title: 'Real browsers on one ?room= find each other, move and message', seconds: 75, tags: ['full', 'multiplayer'] },
+      { id: 'phone', title: 'The demo and the recipes page work at phone size (390 x 844) with touch', seconds: 70, tags: ['full', 'phone'] },
+      { id: 'recipes', title: 'Each recipe has a live link and plays between two players', seconds: 210, tags: ['full', 'docs'] },
+      { id: 'demo-boot', title: 'Playtest hook, deep-path redirect, and SDK error card', seconds: 25, tags: ['smoke'] },
+    ];
     window.hawkesPlaytest = {
-      version: 1, product: 'hawkes-net-js',
-      scenarios: function () { return []; },
-      start: function () {}, stop: function () {},
+      __stub: true, version: 1, product: 'hawkes-net-js',
+      scenarios: function () { return stubScenarios.slice(); },
+      start: function (id, options) {
+        pending = { id: String(id || ''), options: options || {} };
+      },
+      stop: function () { pending = null; },
       state: function () { return { ready: false, status: err ? 'error' : 'loading', note: err || 'loading' }; },
       report: function () {
-        return err ? { scenario: '', outcome: 'error', seconds: 0, metrics: {}, problems: [{ severity: 'bug', message: err }] } : null;
+        return err ? {
+          scenario: pending && pending.id || '',
+          outcome: 'error',
+          seconds: Math.round((performance.now() - hookAt) / 100) / 10,
+          metrics: { hookMs: Math.round(hookAt) },
+          events: [{ t: Math.round((performance.now() - hookAt) / 100) / 10, type: 'error', detail: err }],
+          problems: [{ severity: 'bug', message: err }],
+          log: ['FAIL ' + err],
+        } : null;
       },
     };
     function showCard(reason) {
@@ -106,8 +127,11 @@ net.join('quickstart');</pre>
       if (document.body) paint(); else document.addEventListener('DOMContentLoaded', paint);
     }
     window.__hawkesDemoBoot = {
+      hookAt: hookAt, tried: tried,
+      takePending: function () { var p = pending; pending = null; return p; },
       fail: async function (e) {
-        if (gone) return;
+        if (gone || busy || err) return;
+        busy = true;
         var reason = (e && (e.message || String(e))) || 'module failed to load';
         var bases = ['./', '../', '../../'];
         for (var i = 0; i < bases.length; i++) {
@@ -128,6 +152,16 @@ net.join('quickstart');</pre>
         showCard(reason);
       },
     };
+    // A throw before installNetPlaytest replaces the stub must set stub.err (not leave Studio on "loading" with a dead start).
+    addEventListener('error', function (e) {
+      if (!window.hawkesPlaytest || !window.hawkesPlaytest.__stub) return;
+      var t = e && e.target;
+      if (t && t.tagName === 'SCRIPT') window.__hawkesDemoBoot.fail(new Error('Failed to load ' + (t.src || 'module')));
+      else if ((!t || t === window) && e && (e.error || e.message)) window.__hawkesDemoBoot.fail(e.error || e.message);
+    }, true);
+    addEventListener('unhandledrejection', function (e) {
+      if (window.hawkesPlaytest && window.hawkesPlaytest.__stub) window.__hawkesDemoBoot.fail(e && e.reason);
+    });
   })();
 </script>
 <script type="module">
@@ -500,12 +534,19 @@ net.join('quickstart');</pre>
       {
         id: 'demo-boot', title: 'Playtest hook, deep-path redirect, and SDK error card', seconds: 25, tags: ['smoke'],
         description: 'Checks the playtest hook is present within 1 s, opening a deeper path under the site lands on the working demo with the same query string, and a path that cannot find the SDK shows a plain error card.',
-        run: async ({ check, until, wait, metric, progress }) => {
-          await check('The playtest hook appears within 1 s', async () => {
+        run: async ({ check, until, wait, metric, progress, event }) => {
+          await check('The playtest hook lists smoke, two-players, phone, recipes and demo-boot within 1 s', async () => {
+            const need = ['smoke', 'two-players', 'phone', 'recipes', 'demo-boot'];
             const t0 = performance.now();
-            await until(() => window.hawkesPlaytest?.scenarios?.().some((s) => s.id === 'smoke'), 1000, 'hawkesPlaytest with the real scenarios');
-            metric('hookMs', Math.round(performance.now() - t0));
-            return `${Math.round(performance.now() - t0)} ms; scenarios: ${window.hawkesPlaytest.scenarios().map((s) => s.id).join(', ')}`;
+            // Stub (or the real install) must already list every id — Studio reads scenarios() as soon as the object exists.
+            const ids = () => (window.hawkesPlaytest?.scenarios?.() || []).map((s) => s.id);
+            await until(() => need.every((id) => ids().includes(id)), 1000, () => `all five scenarios (have: ${ids().join(', ') || 'none'})`);
+            const hookMs = Math.round(window.__hawkesDemoBoot?.hookAt ?? (performance.now() - t0));
+            metric('hookMs', hookMs);
+            metric('stubScenarioCount', need.length);
+            event('scenarios-listed', ids().join(', '));
+            if (!(hookMs < 1000)) throw new Error(`window.hawkesPlaytest appeared at ${hookMs} ms (limit 1000 ms)`);
+            return `hook in ${hookMs} ms; scenarios: ${ids().join(', ')}`;
           });
           progress(0.3);
           const frame = (url) => {
@@ -545,6 +586,13 @@ net.join('quickstart');</pre>
               await until(() => { try { return f.contentDocument?.getElementById('hawkes-demo-error'); } catch { return false; } }, 12000, 'the SDK error card');
               const text = f.contentDocument.getElementById('hawkes-demo-error').textContent.trim();
               if (!/^The demo could not load its SDK:/.test(text)) throw new Error(`expected the SDK error card, got "${text.slice(0, 120)}"`);
+              const pt = f.contentWindow?.hawkesPlaytest;
+              const st = pt?.state?.();
+              if (st?.status !== 'error') throw new Error(`stub state is ${st?.status}, expected error`);
+              const ids = (pt.scenarios?.() || []).map((s) => s.id);
+              for (const id of ['smoke', 'two-players', 'phone', 'recipes', 'demo-boot']) {
+                if (!ids.includes(id)) throw new Error(`boot error left scenarios incomplete (have: ${ids.join(', ') || 'none'})`);
+              }
               return text.slice(0, 160);
             } finally { f.remove(); }
           });
@@ -852,6 +900,14 @@ net.join('quickstart');</pre>
       } finally { clearInterval(feed); }
     },
   });
+  // Real install replaced the stub: mark upgrade time, and hand off a Studio start() that arrived while still stubbing.
+  // ?playtest=<id> is already started inside installNetPlaytest — skip a duplicate for the same id.
+  if (window.__hawkesDemoBoot) {
+    window.__hawkesDemoBoot.upgradedAt = performance.now();
+    const pending = window.__hawkesDemoBoot.takePending?.();
+    const auto = new URLSearchParams(location.search).get('playtest') || '';
+    if (pending?.id && pending.id !== auto) window.hawkesPlaytest.start(pending.id, pending.options || {});
+  }
 
   // Quickstart: the code shown is the code run. Only its import address changes, to this page's own copy of the SDK.
   const qsCode = document.getElementById('qs-code'), qsOut = document.getElementById('qs-out'), qsRun = document.getElementById('qs-run');
