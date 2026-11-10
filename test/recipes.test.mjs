@@ -57,6 +57,9 @@ test('chat: you hear what others say, and they hear you', async () => {
   assert.ok(out.includes('Bob: hello Ada'), out.join('\n'));
   bob.leave(); await settle();
   assert.ok(out.includes('Bob left'));
+  const carol = other('Carol', 'recipe-chat'); await settle();
+  assert.ok(out.includes('Carol joined'), out.join('\n'));
+  carol.leave(); await settle();
 });
 
 test('cursors: a moving pointer is sent, and other players\' cursors are noticed', async () => {
@@ -136,4 +139,18 @@ test('the README\'s chat snippet runs too, and talks to the chat recipe', async 
   bob.send('chat', 'hello'); await settle();
   assert.deepEqual(heard, ['Ada: hi, anyone here?']);
   assert.deepEqual(out, ['Bob: hello']);
+});
+
+test('the demo quickstart snippet and peer:join handlers accept the Peer payload', async () => {
+  const html = fs.readFileSync(path.join(root, 'example', 'index.html'), 'utf8');
+  assert.doesNotMatch(html, /when\('peer:join',\s*\(\{\s*peer\s*\}\)/, 'peer:join passes Peer directly, not { peer }');
+  const qs = html.match(/<pre id="qs-code">([\s\S]*?)<\/pre>/)?.[1];
+  assert.ok(qs, 'example/index.html has #qs-code');
+  const file = path.join(tmp, 'demo-quickstart.mjs');
+  fs.writeFileSync(file, qs.replace(`'https://net.hawkesgen.ai/sdk/hawkes-net@1.mjs'`, `'${fake}'`));
+  const out = []; console.log = (...a) => out.push(a.join(' '));
+  await import(pathToFileURL(file).href); await settle();
+  const bob = other('Bob', 'quickstart'); await settle();
+  assert.ok(out.includes('Bob joined'), `quickstart peer:join logged Bob joined (got: ${out.join(' | ')})`);
+  bob.leave(); await settle();
 });

@@ -69,7 +69,7 @@
 
 const net = lobby({ project: 'netdemo', name: 'Ada' });
 net.when('status', ({ status }) => console.log('status:', status)); // connecting, online, reconnecting...
-net.when('peer:join', ({ peer }) => console.log(peer.name, 'joined'));
+net.when('peer:join', (peer) => console.log(peer.name, 'joined'));
 net.on('chat', (text, from) => console.log(from.name + ':', text));
 net.when('status', ({ status }) => { if (status === 'online') net.send('chat', 'hi'); });
 net.join('quickstart');</pre>
@@ -977,7 +977,7 @@ net.join('quickstart');</pre>
   const ripples = []; // { x, y, t0 } in device px, t0 in ms
   const pendingRipple = new Set();
   const scene = { rippleCount: 0, fireflies: FIREFLIES.length, reducedMotion: reduceMq.matches, lit: true, glowBlobs: 0 };
-  net.when('peer:join', ({ peer }) => pendingRipple.add(peer.id));
+  net.when('peer:join', (peer) => { if (peer?.id) pendingRipple.add(peer.id); });
   const RIPPLE_MS = 1800;
   function drawBackdrop(W, H, d, t, L) {
     scene.reducedMotion = reduceMq.matches;
