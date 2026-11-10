@@ -56,7 +56,7 @@ class FakeLobby {
       if (!this.room) return;
       const members = hub.room(this.room); members.push(this);
       this.status = 'online'; this.peers = new Map(); this.ord = members.length;
-      for (const m of members) { if (m === this) continue; this.peers.set(m.id, m.asPeer()); m.peers.set(this.id, this.asPeer()); m.ev.emit('peer:join', { peer: this.asPeer() }); }
+      for (const m of members) { if (m === this) continue; this.peers.set(m.id, m.asPeer()); m.peers.set(this.id, this.asPeer()); m.ev.emit('peer:join', this.asPeer()); }
       this.ev.emit('status', { status: 'online', peers: members.length - 1 });
       this.ev.emit('joined', this);
       later(() => this.host()?.pushState());
