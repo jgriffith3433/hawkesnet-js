@@ -85,7 +85,7 @@ net.join('quickstart');</pre>
     var hookAt = performance.now(), err = null, gone = false, busy = false, pending = null, tried = Object.create(null);
     // Keep in sync with installNetPlaytest (smoke, two-players) + phone / recipes / demo-boot on this page.
     var stubScenarios = [
-      { id: 'smoke', title: 'Two players in one page meet in a room, move, message and leave', seconds: 45, tags: ['smoke'] },
+      { id: 'smoke', title: 'Two players in one page meet in a room, move, message and leave', seconds: 90, tags: ['smoke'] },
       { id: 'two-players', title: 'Real browsers on one ?room= find each other, move and message', seconds: 75, tags: ['full', 'multiplayer'] },
       { id: 'phone', title: 'The demo and the recipes page work at phone size (390 x 844) with touch', seconds: 70, tags: ['full', 'phone'] },
       { id: 'recipes', title: 'Each recipe has a live link and plays between two players', seconds: 210, tags: ['full', 'docs'] },
@@ -167,13 +167,14 @@ net.join('quickstart');</pre>
 <script type="module">
   // The SDK from this folder (npm: import { lobby } from '@hawkesgen/net'). ?net= another Hawkes Net (an origin);
   // ?project= your project. On a Studio beta site the page names beta Hawkes Net (window.HAWKES_NET_ENDPOINT).
-  let lobby, VERSION, Track, installNetPlaytest, recipesScenario, phoneScenario, createTag;
+  let lobby, VERSION, Track, installNetPlaytest, recipesScenario, phoneScenario, createTag, createBots;
   try {
     ({ lobby, VERSION, Track } = await import('../hawkes-net.mjs'));
     ({ installNetPlaytest } = await import('./net-playtest.mjs'));
     ({ recipesScenario } = await import('./recipes-playtest.mjs'));
     ({ phoneScenario } = await import('./phone-playtest.mjs'));
     ({ createTag } = await import('./tag.mjs'));
+    ({ createBots } = await import('./bots.mjs'));
   } catch (e) {
     await window.__hawkesDemoBoot.fail(e);
     throw e;
@@ -289,6 +290,20 @@ net.join('quickstart');</pre>
   const smooth = q.get('smooth') !== '0';
   const glide = { lagMs: Math.max(0, Number(q.get('lag')) || 0), packets: 0, watch: null };
   const others = new Map();
+  const bots = createBots(net, {
+    tag,
+    myPos: () => [me.x, me.y],
+    posOf: (id) => {
+      if (id === net.id) return { x: me.x, y: me.y };
+      const o = others.get(id);
+      return o ? { x: o.x, y: o.y } : null;
+    },
+    eachReal: (fn) => {
+      if (net.id) fn(net.id, me.x, me.y);
+      for (const [id, o] of others) fn(id, o.x, o.y);
+    },
+  });
+  window.hawkesBots = bots;
   const justSet = new Set(); // dots whose spot was set this frame (first pose), for the trail
   const tracks = new Map();
   // The lobby's room can change (a rejoin, a new shard): the link figures are always the current room's.
@@ -372,8 +387,8 @@ net.join('quickstart');</pre>
     return { frames: a.length, p95FrameMs: a.length ? Math.round(a[Math.min(a.length - 1, Math.floor(a.length * 0.95))] * 10) / 10 : 0, avgFrameMs: a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 10) / 10 : 0 };
   };
   window.hawkesDemoLoad = (n) => { loadN = Math.max(0, Math.min(8, n | 0)); }; // named setup shortcut: n extra blobs
-  window.hawkesDemoView = () => ({ me: { ...me }, stacked: stacked(), version: VERSION, scene: { ...scene }, tag: tag.snapshot(), dots: drawnDots });
-  setInterval(() => net.pose([me.x, me.y, 0]), 50);
+  window.hawkesDemoView = () => ({ me: { ...me }, stacked: stacked(), version: VERSION, scene: { ...scene }, tag: tag.snapshot(), bots: bots.snapshot(), dots: drawnDots });
+  setInterval(() => { net.pose([me.x, me.y, 0]); bots.tick(performance.now()); }, 50);
 
   // Studio's playtest bot (net-playtest.mjs): a second player in this page, the dot moved by real pointer input.
   let botTag = null, inTagPlaytest = false;
@@ -525,7 +540,83 @@ net.join('quickstart');</pre>
     main: () => net,
     openBot: async () => { const b = lobby({ ...opts, name: 'Playtest bot', log: false }); botTag = createTag(b); b.join('js-demo'); return b; },
     drive: async (step) => { if (inTagPlaytest) { await step(100); return; } if (stacked()) return drag(step); for (let i = 0; i <= 30 && !inTagPlaytest; i++) { areaPointer(0.2 + i * 0.02, 0.3 + Math.sin(i / 5) * 0.1); await step(60); } }, // a phone: by touch
+    beforeBot: async ({ check, until, wait, metric, event, step }) => {
+      // Alone: host filler bots (shared state) appear after 3 s; assert within 5 s, then a Tag with them, then one leaves on a real join.
+      const aloneAt = performance.now();
+      await check('Alone, 3 filler bots appear within 5 seconds', async () => {
+        await until(() => {
+          bots.tick(performance.now());
+          const v = hawkesDemoView();
+          const botDots = (v.dots || []).filter((d) => d.bot);
+          return bots.count >= 3 && botDots.length >= 3 && botDots.every((d) => d.name === 'Bot');
+        }, 5000, '3 local bots labelled Bot on the canvas and in shared state');
+        const ms = Math.round(performance.now() - aloneAt);
+        const botDots = hawkesDemoView().dots.filter((d) => d.bot);
+        const cols = new Set(botDots.map((d) => d.color));
+        if (cols.size < 3) throw new Error(`bots should have distinct colours, got ${[...cols].join(', ')}`);
+        metric('fillerBotsMs', ms);
+        metric('fillerBotCount', bots.count);
+        event('filler-bots', `${bots.count}@${ms}ms`);
+        if (ms > 5000) throw new Error(`bots took ${ms} ms (limit 5000 ms)`);
+        return `${bots.count} bots in ${ms} ms (${[...cols].join(' ')})`;
+      });
+      await check('A bot tags or is tagged within 30 seconds', async () => {
+        const startSeq = tag.seq;
+        const startIt = tag.it;
+        const botIds = () => new Set(bots.list().map((b) => b.id));
+        const tagged = () => {
+          const ids = botIds();
+          if (!(tag.seq > startSeq)) return false;
+          return ids.has(tag.it) || ids.has(tag.immuneFrom) || (startIt && ids.has(startIt) && tag.it !== startIt);
+        };
+        const t0 = performance.now();
+        while (!tagged() && performance.now() - t0 < 30000) {
+          bots.tick(performance.now());
+          const list = bots.list();
+          if (list.length) {
+            const ids = botIds();
+            if (tag.it === net.id) {
+              const target = list.reduce((a, b) => (Math.hypot(a.x - me.x, a.y - me.y) <= Math.hypot(b.x - me.x, b.y - me.y) ? a : b));
+              moveInput(target.x, target.y);
+            } else if (ids.has(tag.it)) {
+              const itBot = list.find((b) => b.id === tag.it) || list[0];
+              moveInput(me.x + (itBot.x - me.x) * 0.2, me.y + (itBot.y - me.y) * 0.2);
+            } else {
+              moveInput(list[0].x, list[0].y);
+            }
+          }
+          await step(40);
+        }
+        if (!tagged()) throw new Error(`no bot tag after 30 s (it=${tag.it}, seq=${tag.seq}, start=${startIt}/${startSeq})`);
+        const ms = Math.round(performance.now() - t0);
+        metric('fillerTagMs', ms);
+        event('filler-tag', `${startIt}->${tag.it}:${ms}ms`);
+        return `It ${startIt} → ${tag.it} in ${ms} ms (bot involved)`;
+      });
+      await check('Bots leave when a real player joins', async () => {
+        const before = bots.count;
+        if (before < 1) throw new Error('expected bots before a visitor joins');
+        const visitor = lobby({ ...opts, name: 'Visitor', log: false });
+        try {
+          visitor.join('js-demo');
+          await until(() => net.peers.has(visitor.id), 8000, 'the visitor peer to show in the room');
+          await until(() => {
+            bots.tick(performance.now());
+            return bots.count === before - 1 && bots.count === Math.max(0, 4 - (net.peers.size + 1));
+          }, 8000, () => `one bot to leave (had ${before}, now ${bots.count}, real ${net.peers.size + 1})`);
+          metric('fillerBotsAfterJoin', bots.count);
+          event('filler-bot-left', `${before}->${bots.count}`);
+          return `${before} bots → ${bots.count} after visitor joined`;
+        } finally {
+          try { await visitor.leave(); } catch { /* gone */ }
+          await until(() => !![...net.peers.keys()].every((id) => net.peers.get(id)?.name !== 'Visitor'), 5000, 'visitor to leave');
+        }
+      });
+      // Alone checks done: clear fillers so openBot / the rest of smoke is never blocked by local bots.
+      bots.suspend();
+    },
     afterTwoPlayers: async ({ check, other, until, wait, metric, event, step }) => {
+      bots.suspend(); // two-players peers aren't named Playtest; don't let fillers steal It
       inTagPlaytest = true;
       try {
         await runTagChecks({ check, until, wait, metric, event, step, peerId: other });
@@ -1082,7 +1173,8 @@ net.join('quickstart');</pre>
   // The side list: one row per player, with their colour and how their link to you runs. Rebuilt only when something in it changes.
   const listEl = document.getElementById('plist'), listN = document.getElementById('players-n');
   let listSig = '';
-  const kindOf = (id, it = false) => {
+  const kindOf = (id, it = false, bot = false) => {
+    if (bot) return it ? 'Local bot · It' : 'Local bot';
     const t = net.room?.transport;
     const base = id === 'me'
       ? (t === 'p2p' ? 'You · peer to peer' : t === 'relay' ? 'You · Hawkes relay' : 'You')
@@ -1093,7 +1185,7 @@ net.join('quickstart');</pre>
     return it ? `${base} · It` : base;
   };
   function renderList(dots) {
-    const rows = dots.map((o) => ({ key: o.key, name: o.name, color: o.color, kind: kindOf(o.key, o.it), it: o.it }));
+    const rows = dots.map((o) => ({ key: o.key, name: o.name, color: o.color, kind: kindOf(o.key, o.it, o.bot), it: o.it }));
     const sig = JSON.stringify(rows);
     if (sig === listSig) return;
     listSig = sig;
@@ -1124,7 +1216,7 @@ net.join('quickstart');</pre>
     const cb = box(), cw = Math.round(cb.width * d), ch = Math.round(cb.height * d);
     if (c.width !== cw) c.width = cw; if (c.height !== ch) c.height = ch; // resizing every frame reallocates the canvas
     const myName = name + ' (you)', meIt = tag.isIt(net.id);
-    const dots = [{ key: 'me', id: net.id, cx: (L + me.x * (c.width - L)), cy: me.y * c.height, color: YOU, name: myName, label: tag.labelFor(net.id, myName), it: meIt }]; // you first: your label gets the best spot
+    const dots = [{ key: 'me', id: net.id, cx: (L + me.x * (c.width - L)), cy: me.y * c.height, color: YOU, name: myName, label: tag.labelFor(net.id, myName), it: meIt, bot: false }]; // you first: your label gets the best spot
     // Each blob follows its Track's point with a short ease (FOLLOW_MS): when the network hiccups and the Track corrects
     // its guess, the blob slides there over a few frames instead of jumping.
     const tNow = performance.now(), ease = 1 - Math.exp(-(tNow - lastFrame) / FOLLOW_MS);
@@ -1144,7 +1236,17 @@ net.join('quickstart');</pre>
         o.x += dx; o.y += dy;
       }
       const peerName = p.name || id, peerIt = tag.isIt(id);
-      dots.push({ key: id, id, cx: L + o.x * (c.width - L), cy: o.y * c.height, color: colorFor(id), name: peerName, label: tag.labelFor(id, peerName), it: peerIt });
+      dots.push({ key: id, id, cx: L + o.x * (c.width - L), cy: o.y * c.height, color: colorFor(id), name: peerName, label: tag.labelFor(id, peerName), it: peerIt, bot: false });
+    }
+    // Host-local filler bots (shared state): drawn like peers, labelled "Bot", never real lobby peers.
+    for (const b of bots.list()) {
+      colors.set(b.id, b.color);
+      const botIt = tag.isIt(b.id);
+      dots.push({
+        key: b.id, id: b.id,
+        cx: L + b.x * (c.width - L), cy: b.y * c.height,
+        color: b.color, name: b.name, label: tag.labelFor(b.id, b.name), it: botIt, bot: true,
+      });
     }
     // The playtest's frame log for one player: where each frame drew it, when, and how many poses had landed by then.
     if (glide.watch) {
@@ -1186,7 +1288,7 @@ net.join('quickstart');</pre>
       drawBlob(o, d, tNow, st);
     }
     drawnDots = dots.map((o) => ({
-      key: o.key, id: o.id, label: o.label, name: o.name, color: o.color, it: o.it, glowing: o.glowing, ringRadius: o.ringRadius,
+      key: o.key, id: o.id, label: o.label, name: o.name, color: o.color, it: o.it, bot: !!o.bot, glowing: o.glowing, ringRadius: o.ringRadius,
       lookX: o.lookX, lookY: o.lookY, stretch: o.stretch, squash: o.squash, squashed: o.squashed, blinking: o.blinking, blinked: o.blinked, breath: o.breath, eyes: o.eyes, speed: o.speed,
     }));
     renderList(dots);
@@ -1199,7 +1301,7 @@ net.join('quickstart');</pre>
     }
     labelRects = labels.map((l) => ({ label: l.label, x: l.x, y: l.y, w: l.w, h: l.h, backed: !!l.backed }));
     canvasSize = [c.width, c.height];
-    document.getElementById('count').textContent = `${net.peers.size + 1} here`;
+    document.getElementById('count').textContent = `${net.peers.size + 1 + bots.count} here`;
     if (lastDraw) { frameMs.push(tNow - lastDraw); if (frameMs.length > 600) frameMs.shift(); }
     lastDraw = tNow;
     requestAnimationFrame(draw);

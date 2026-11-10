@@ -23,6 +23,8 @@
 //     tolerance: 0.02,                                    // "the same place", in the page's units
 //     extra: async (c) => {},                             // optional more checks: c.check(name, fn), c.main, c.bot
 //     ready: () => true,                                  // optional: the page is ready to play (default: main() exists)
+//     beforeBot: async (c) => {},                         // optional: smoke checks while still alone, before openBot(); c has
+//                                                         // check, main, until, wait, metric, event, progress, step, log
 //     afterTwoPlayers: async (c) => {},                   // optional: more two-players checks after the messages check; c has
 //                                                         // check, main, other, until, wait, metric, roundTrips, openBot, event, step
 //     scenarios: [{ id, title, seconds, tags, description,  // optional more scenarios of this page's own:
@@ -31,8 +33,8 @@
 
 export function installNetPlaytest(o) {
   const scenarios = [
-    { id: 'smoke', title: 'Two players in one page meet in a room, move, message and leave', seconds: 45, tags: ['smoke'],
-      description: 'Connects to the page\'s Hawkes Net, opens a second player in the same room, checks poses both ways (this page\'s player moved by real input), messages both ways, and the second player leaving.' },
+    { id: 'smoke', title: 'Two players in one page meet in a room, move, message and leave', seconds: 90, tags: ['smoke'],
+      description: 'Connects to the page\'s Hawkes Net, optional alone checks (beforeBot), opens a second player in the same room, checks poses both ways (this page\'s player moved by real input), messages both ways, and the second player leaving.' },
     { id: 'two-players', title: 'Real browsers on one ?room= find each other, move and message', seconds: 75, tags: ['full', 'multiplayer'],
       description: 'Run with Studio peers 2-4: each browser waits for another player in its ?room=, moves by real input, checks it sees the other move and that messages go both ways.' },
   ];
@@ -141,6 +143,11 @@ export function installNetPlaytest(o) {
     });
     progress(0.15);
     if (!okConnect) return finish('lost');
+    if (o.beforeBot) {
+      await o.beforeBot({ check, main, until, wait, metric, event, progress, step, log });
+      if (run.lines.some((l) => l.ok === false)) return finish('lost');
+      progress(0.22);
+    }
     let poses = [];
     const okJoin = await check('A second player joined the same room', async () => {
       bot = await o.openBot();

@@ -29,6 +29,7 @@ export function createTag(net, options = {}) {
     seq: 0,
   };
   const positions = new Map(); // player id -> { x, y }
+  const extras = new Map();    // local/simulated players (e.g. host bots) id -> { x, y }
   const peerAck = new Map();   // peer id -> { it, seq }
   const localPos = { x: 0.5, y: 0.5, known: false };
 
@@ -42,11 +43,12 @@ export function createTag(net, options = {}) {
   const myId = () => currentRoom?.id ?? net?.id ?? null;
   const isHost = () => Boolean(currentRoom ? currentRoom.isHost : net?.isHost);
   const peersMap = () => currentRoom?.peers ?? net?.peers ?? new Map();
-  const isPresent = (id) => Boolean(id && (id === myId() || peersMap().has(id)));
+  const isPresent = (id) => Boolean(id && (id === myId() || peersMap().has(id) || extras.has(id)));
   const presentIds = () => {
     const me = myId();
     const ids = [...peersMap().keys()];
     if (me && !ids.includes(me)) ids.unshift(me);
+    for (const id of extras.keys()) if (id && !ids.includes(id)) ids.push(id);
     return ids.filter(Boolean).sort();
   };
 
@@ -206,7 +208,8 @@ export function createTag(net, options = {}) {
     if (!touchAction) return;
     let targetId = null;
     if (game.it === me) {
-      for (const id of peersMap().keys()) {
+      for (const id of presentIds()) {
+        if (id === me) continue;
         const p = positions.get(id);
         if (p && Math.hypot(itPos.x - p.x, itPos.y - p.y) <= radius) { targetId = id; break; }
       }
@@ -265,6 +268,7 @@ export function createTag(net, options = {}) {
     game.timeAsIt = {};
     game.seq = 0;
     positions.clear();
+    extras.clear();
     peerAck.clear();
     sentTouchKey = '';
     if (localPos.known && room.id) positions.set(room.id, { x: localPos.x, y: localPos.y });
@@ -404,6 +408,26 @@ export function createTag(net, options = {}) {
       }
     },
     snapshot: (at = clock()) => snapshot(at),
+    // Host-local extras (filler bots): same Tag rules, not real peers. Positions feed touch checks.
+    setExtra(id, x, y) {
+      if (!id || !Number.isFinite(x) || !Number.isFinite(y)) return;
+      extras.set(id, { x, y });
+      positions.set(id, { x, y });
+      checkTouch();
+    },
+    removeExtra(id) {
+      if (!id || !extras.has(id)) return;
+      extras.delete(id);
+      positions.delete(id);
+      if (isHost()) ensureIt();
+    },
+    clearExtras() {
+      for (const id of extras.keys()) positions.delete(id);
+      extras.clear();
+      if (isHost()) ensureIt();
+    },
+    hasExtra: (id) => extras.has(id),
+    extraIds: () => [...extras.keys()],
   };
 
   return api;

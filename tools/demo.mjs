@@ -23,6 +23,7 @@ fs.writeFileSync(path.join(out, 'recipes.mjs'), fs.readFileSync(path.join(root, 
 fs.copyFileSync(path.join(root, 'example', 'recipes-playtest.mjs'), path.join(out, 'recipes-playtest.mjs'));
 fs.copyFileSync(path.join(root, 'example', 'phone-playtest.mjs'), path.join(out, 'phone-playtest.mjs'));
 fs.writeFileSync(path.join(out, 'tag.mjs'), sdkPath(fs.readFileSync(path.join(root, 'example', 'tag.mjs'), 'utf8')));
+fs.writeFileSync(path.join(out, 'bots.mjs'), sdkPath(fs.readFileSync(path.join(root, 'example', 'bots.mjs'), 'utf8')));
 fs.mkdirSync(path.join(out, 'recipes'), { recursive: true });
 for (const f of fs.readdirSync(path.join(root, 'recipes'))) fs.copyFileSync(path.join(root, 'recipes', f), path.join(out, 'recipes', f));
 const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
