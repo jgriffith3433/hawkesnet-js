@@ -130,7 +130,7 @@ export function phoneScenario({ pages }) {
       installGuard();
       clearFrames();
       const nativePhone = innerWidth === W && innerHeight === H;
-      let recipesFrame = null;
+      let recipesFrame = null, startFrame = null;
       try {
         let win = window, doc = document;
         if (!nativePhone) {
@@ -349,12 +349,47 @@ export function phoneScenario({ pages }) {
 
         recipesFrame.remove();
         recipesFrame = null;
+
+        if (pages.start) {
+          startFrame = await openFrame(pages.start, 'start', nativePhone);
+          const swWin = startFrame.contentWindow, sd = startFrame.contentDocument;
+          await c.until(
+            () => sd.getElementById('net')?.dataset.version && sd.querySelectorAll('pre.code').length === 5,
+            15000,
+            'the getting started page to load at 390x844',
+          );
+          await c.check(`At 390 x 844 the getting started page has no sideways scroll, text >= ${MIN_TEXT_PX} px, and scrolling code boxes`, async () => {
+            const { cw, sw } = assertNoSidewaysScroll(sd, swWin, 'start');
+            const { count, least, small, clipped } = measureSmallestText(sd, swWin);
+            c.metric('startSidewaysPx', Math.max(0, sw - cw));
+            c.metric('startSmallestTextPx', least);
+            if (!count) throw new Error('no visible text on getting started page');
+            if (small.length) throw new Error(`start text under ${MIN_TEXT_PX}px: ${small.slice(0, 5).join(', ')}`);
+            if (clipped.length) throw new Error(`start text outside 390px viewport: ${clipped.slice(0, 5).join(', ')}`);
+            const pres = [...sd.querySelectorAll('pre.code')];
+            const wideOnes = pres.filter((p) => p.scrollWidth > p.clientWidth);
+            if (!wideOnes.length) throw new Error('no getting started code is wider than its box');
+            for (const p of wideOnes) {
+              const b = p.getBoundingClientRect();
+              if (b.right > cw + 1) throw new Error(`start code box right edge at ${Math.round(b.right)} px (> ${cw} px)`);
+              if (!['auto', 'scroll'].includes(swWin.getComputedStyle(p).overflowX)) throw new Error('start code box lacks overflow-x scroll');
+              p.scrollLeft = 60;
+              if (p.scrollLeft < 1) throw new Error('start code box did not scroll sideways');
+            }
+            assertNoSidewaysScroll(sd, swWin, 'start after code scroll');
+            c.metric('startCodeBoxesScrolling', wideOnes.length);
+            return `document width ${sw} px = viewport ${cw} px, smallest text ${least} px, ${wideOnes.length}/${pres.length} code boxes scroll`;
+          });
+          startFrame.remove();
+          startFrame = null;
+        }
         // Return the 390x844 demo view to the top so final screenshots show the stacked phone layout and moved dot.
         win.scrollTo(0, 0);
         await c.wait(400);
         c.progress(1);
       } finally {
         if (recipesFrame) recipesFrame.remove();
+        if (startFrame) startFrame.remove();
       }
     },
   };

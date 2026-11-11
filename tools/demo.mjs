@@ -19,6 +19,9 @@ fs.writeFileSync(path.join(out, 'index.html'), html.split("'../hawkes-net.mjs'")
 // The recipes: the docs page, its helper modules, and the recipes' code (the same files `npm test` runs).
 const sdkPath = (t) => t.split("'../hawkes-net.mjs'").join("'./hawkes-net.mjs'");
 fs.writeFileSync(path.join(out, 'recipes.html'), sdkPath(fs.readFileSync(path.join(root, 'example', 'recipes.html'), 'utf8')));
+fs.writeFileSync(path.join(out, 'start.html'), sdkPath(fs.readFileSync(path.join(root, 'example', 'start.html'), 'utf8')));
+fs.writeFileSync(path.join(out, 'start.mjs'), sdkPath(fs.readFileSync(path.join(root, 'example', 'start.mjs'), 'utf8')));
+fs.copyFileSync(path.join(root, 'example', 'start-playtest.mjs'), path.join(out, 'start-playtest.mjs'));
 fs.writeFileSync(path.join(out, 'recipes.mjs'), fs.readFileSync(path.join(root, 'example', 'recipes.mjs'), 'utf8').replace("'../recipes/'", "'./recipes/'"));
 fs.copyFileSync(path.join(root, 'example', 'recipes-playtest.mjs'), path.join(out, 'recipes-playtest.mjs'));
 fs.copyFileSync(path.join(root, 'example', 'phone-playtest.mjs'), path.join(out, 'phone-playtest.mjs'));

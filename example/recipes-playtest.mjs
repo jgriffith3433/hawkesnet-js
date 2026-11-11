@@ -73,6 +73,8 @@ export function recipesScenario({ lobby, opts, pointer, sdk, hash }) {
       const docs = { [new URL('./recipes.html', location.href).href]: f.contentDocument };
       const demoUrl = new URL('./index.html', location.href).href;
       docs[demoUrl] = new DOMParser().parseFromString(await (await fetch(demoUrl)).text(), 'text/html');
+      const startUrl = new URL('./start.html', location.href).href;
+      docs[startUrl] = new DOMParser().parseFromString(await (await fetch(startUrl)).text(), 'text/html');
       const cache = new Map(), broken = []; let checked = 0, external = 0;
       for (const [from, doc] of Object.entries(docs)) {
         for (const a of doc.querySelectorAll('a[href]')) {

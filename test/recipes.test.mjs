@@ -154,3 +154,83 @@ test('the demo quickstart snippet and peer:join handlers accept the Peer payload
   assert.ok(out.includes('Bob joined'), `quickstart peer:join logged Bob joined (got: ${out.join(' | ')})`);
   bob.leave(); await settle();
 });
+
+test('getting started (example/start.html): five numbered steps with Copy and expected output, matching example/start.mjs', async () => {
+  const startHtml = fs.readFileSync(path.join(root, 'example', 'start.html'), 'utf8');
+  const startMjs = fs.readFileSync(path.join(root, 'example', 'start.mjs'), 'utf8');
+  const indexHtml = fs.readFileSync(path.join(root, 'example', 'index.html'), 'utf8');
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  const demoTool = fs.readFileSync(path.join(root, 'tools', 'demo.mjs'), 'utf8');
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+
+  assert.match(indexHtml, /id="hud"[\s\S]*?href="\.\/start\.html"/, 'demo header links to ./start.html');
+  assert.match(readme, /example\/start\.html/, 'README links to example/start.html');
+  assert.match(demoTool, /'start\.html'/, 'tools/demo.mjs copies example/start.html into dist/');
+  assert.match(demoTool, /'start\.mjs'/, 'tools/demo.mjs copies example/start.mjs into dist/');
+
+  const unescape = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+  const steps = [...startHtml.matchAll(/<li class="step" id="step-(\d+)" data-step="\d+">([\s\S]*?)<\/li>/g)];
+  assert.equal(steps.length, 5, 'start.html has exactly five numbered steps');
+
+  const codeBlocks = [];
+  for (let i = 0; i < 5; i++) {
+    const num = i + 1;
+    assert.equal(Number(steps[i][1]), num, `step ${num} is numbered ${num}`);
+    const body = steps[i][2];
+    assert.match(body, new RegExp(`<span class="step-num"[^>]*>${num}<\\/span>\\s*<h2>${num}\\.`), `step ${num} heading starts with ${num}.`);
+    const codeMatch = body.match(new RegExp(`<pre id="step-${num}-code" class="code" data-step="${num}">([\\s\\S]*?)<\\/pre>`));
+    assert.ok(codeMatch, `step ${num} has #step-${num}-code`);
+    codeBlocks.push(unescape(codeMatch[1]));
+    assert.match(body, new RegExp(`<button type="button" class="copy" data-copy="step-${num}-code">Copy<\\/button>`), `step ${num} has a Copy button`);
+    assert.match(body, new RegExp(`<div class="expect" id="step-${num}-expect"[\\s\\S]*?What you should see`), `step ${num} has a What you should see box`);
+  }
+
+  // Every <pre> on start.html is a step code block with a Copy button.
+  assert.equal([...startHtml.matchAll(/<pre\b/g)].length, 5, 'every <pre> on start.html has a Copy button');
+
+  // Step 1 installs the GitHub tag tarball from README.md.
+  const tarballUrl = `https://github.com/jgriffith3433/hawkesnet-js/archive/refs/tags/v${pkg.version}.tar.gz`;
+  assert.ok(readme.includes(tarballUrl), 'README names the current version tag tarball');
+  assert.ok(codeBlocks[0].includes(tarballUrl), 'Step 1 installs the GitHub tag tarball from README');
+
+  // Steps 2..5 match example/start.mjs byte-for-byte so the page cannot drift from tested code.
+  assert.equal(codeBlocks.slice(1).join('\n\n') + '\n', startMjs, 'Steps 2..5 on start.html match example/start.mjs');
+
+  // Font sizes in start.html are at least 12 px and code blocks scroll inside their box.
+  for (const m of startHtml.matchAll(/font(?:-size)?:\s*(?:[0-9]+\s+)?([0-9.]+)px/g)) {
+    assert.ok(Number(m[1]) >= 12, `font size ${m[1]}px in start.html is >= 12px`);
+  }
+  assert.match(startHtml, /pre\.code\s*\{[^}]*overflow-x:\s*auto/, 'pre.code scrolls horizontally inside its box');
+  assert.match(startHtml, /pre\.code\s*\{[^}]*max-width:\s*100%/, 'pre.code stays within its container');
+
+  // Run example/start.mjs against fake-net.mjs and verify the two-tab room flow matches the expected output boxes.
+  const listeners = {};
+  Object.assign(globalThis, { innerWidth: 1000, innerHeight: 500, addEventListener: (ev, fn) => { listeners[ev] = fn; } });
+  const file = path.join(tmp, 'start-example.mjs');
+  fs.writeFileSync(file, startMjs.replace(`'@hawkesgen/net'`, `'${fake}'`));
+  const out = [];
+  console.log = (...a) => out.push(a.join(' '));
+  await import(pathToFileURL(file).href);
+  await settle();
+  assert.ok(out.includes('status: connecting'), 'logs status: connecting');
+  assert.ok(out.includes('status: online'), 'logs status: online');
+  assert.ok(out.includes('you: hi, anyone here?'), 'logs initial greeting');
+
+  const bob = other('Bob', 'getting-started');
+  const bobPoses = [];
+  bob.onPose((id, s) => bobPoses.push(s.p));
+  await settle();
+  assert.ok(out.includes('Bob joined'), 'logs Bob joined');
+
+  bob.send('chat', 'hello Ada');
+  bob.pose([0.6, 0.4, 0]);
+  listeners.pointermove({ clientX: 350, clientY: 250 });
+  await settle();
+  assert.ok(out.includes('Bob: hello Ada'), 'logs Bob: hello Ada');
+  assert.ok(out.includes('Bob is at 0.60, 0.40'), 'logs Bob is at 0.60, 0.40');
+  assert.deepEqual(bobPoses.at(-1), [0.35, 0.5, 0], 'sends pointer pose to Bob');
+
+  bob.leave();
+  await settle();
+  assert.ok(out.includes('Bob left'), 'logs Bob left');
+});

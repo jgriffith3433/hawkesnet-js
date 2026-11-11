@@ -18,6 +18,8 @@ net.pose([x, y, z], yaw);                                                // your
 net.onPose((id, state) => moveAvatar(id, state.p, state.y));
 ```
 
+**Getting started:** [`example/start.html`](example/start.html) walks through five numbered steps from installing the GitHub tag tarball to two tabs in one room, with the console output you should see after each step (backed by [`example/start.mjs`](example/start.mjs)).
+
 ## Recipes
 
 Things most games need, each a short file you can paste, run live on the demo site's **Recipes** page and tested
