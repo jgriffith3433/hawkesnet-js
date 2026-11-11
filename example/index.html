@@ -959,17 +959,24 @@ net.join('quickstart');</pre>
           const view = () => hawkesDemoView();
           await until(() => net.room && banner().state === 'online', 15000, 'this tab to be connected');
           const peer = lobby({ ...opts, name: 'Playtest bot', log: false }); peer.join('js-demo');
+          // A player is drawn once it has sent a pose, so the second player keeps posing at its own spot (like a real page does).
+          const feed = setInterval(() => { try { peer.pose([0.72, 0.62, 0], 0); } catch { /* left */ } }, 50);
           try {
             await until(() => net.room.peers.has(peer.id), 15000, 'the second player to arrive');
+            await until(() => (view().dots || []).some((d) => d.id === peer.id), 5000, 'the second player to be drawn');
             await check('Within 1 s of the drop the tab says Reconnecting and its own dot stays frozen', async () => {
               const was = { x: me.x, y: me.y };
               const t0 = performance.now();
-              window.hawkesPlaytest.dropFor(4000);
+              window.hawkesPlaytest.dropFor(7000);
               await until(() => banner().state === 'reconnecting', 1000, () => `Reconnecting within 1 s (it says "${banner().text}")`);
               metric('reconnectingMs', Math.round(performance.now() - t0));
               areaPointer(Math.min(0.95, me.x + 0.2), Math.min(0.95, me.y + 0.2)); await wait(300);
               if (Math.hypot(me.x - was.x, me.y - was.y) > 0.001) throw new Error('own dot moved while down');
               if (!view().dots.find((d) => d.key === 'me')?.frozen) throw new Error('own dot is not marked frozen while down');
+              // Hold the state on screen (events make Studio take screenshots): this one is the desktop capture.
+              event('shot:reconnecting:desktop', `${banner().text} at ${innerWidth}px wide`);
+              await wait(1200);
+              if (banner().state !== 'reconnecting') throw new Error(`the banner left Reconnecting after ${Math.round(performance.now() - t0)} ms while the link was still blocked (${banner().state})`);
               event('banner:reconnecting', banner().text);
               return `${banner().text} after ${Math.round(performance.now() - t0)} ms, dot frozen`;
             });
@@ -991,6 +998,37 @@ net.join('quickstart');</pre>
               event('identity:kept', `${id.name}:${id.color}`);
               return `${id.name} ${id.color}`;
             });
+            await check('At 390 px wide the Reconnecting banner shows too (phone-size frame)', async () => {
+              const phone = innerWidth <= 420;
+              let frame = null, w = window;
+              if (!phone) {
+                frame = document.createElement('iframe');
+                frame.title = 'Phone-size view (reconnect)'; frame.dataset.phonePlaytest = 'reconnect';
+                frame.src = new URL(`./index.html`, location.href).href;
+                const scale = Math.min(1, (innerHeight - 16) / 844);
+                frame.style.cssText = `position:fixed;left:50%;top:50%;width:390px;height:844px;box-sizing:content-box;border:1px solid #2a3340;border-radius:14px;background:#0b0f14;z-index:99990;transform-origin:center center;transform:translate(-50%,-50%) scale(${scale})`;
+                document.body.append(frame);
+                await new Promise((res, rej) => { frame.addEventListener('load', res, { once: true }); setTimeout(() => rej(new Error('the phone-size frame did not load')), 15000); });
+                w = frame.contentWindow;
+              }
+              try {
+                const fb = () => w.hawkesNetBanner?.() || {};
+                await until(() => fb().state === 'online' && w.hawkesPlaytest?.dropFor, 20000, 'the phone-size page to be connected');
+                const t0 = performance.now();
+                w.hawkesPlaytest.dropFor(5000);
+                await until(() => fb().state === 'reconnecting', 1000, () => `Reconnecting within 1 s at 390 px (it says "${fb().text}")`);
+                if (w.innerWidth > 420 && phone === false) throw new Error(`the frame is ${w.innerWidth}px wide, not 390`);
+                event('shot:reconnecting:390px', `${fb().text} at ${w.innerWidth}px wide`);
+                await wait(1500);
+                if (fb().state !== 'reconnecting') throw new Error(`the 390 px banner left Reconnecting early (${fb().state})`);
+                const b = w.document.getElementById('banner').getBoundingClientRect();
+                if (b.right > w.innerWidth + 1 || b.left < -1) throw new Error('the banner runs outside the 390 px width');
+                metric('reconnecting390Ms', Math.round(performance.now() - t0));
+                await until(() => fb().state === 'back', 20000, 'Back in the room at 390 px');
+                event('shot:back:390px', fb().text);
+                return `${fb().text} at ${w.innerWidth}px wide`;
+              } finally { frame?.remove(); }
+            });
             await check('The other player stays drawn at 40% with away, and is removed only after 15 s', async () => {
               const gone = (id) => !net.room.peers.has(id);
               const ghost = () => (view().dots || []).find((x) => x.id === peer.id);
@@ -1007,7 +1045,7 @@ net.join('quickstart');</pre>
               event('peer:removed', `${id} after ${ms} ms`);
               return `ghosted, removed after ${ms} ms`;
             });
-          } finally { try { await peer.leave(); } catch { /* gone */ } }
+          } finally { clearInterval(feed); try { await peer.leave(); } catch { /* gone */ } }
         },
       },
       {
@@ -1078,7 +1116,7 @@ net.join('quickstart');</pre>
           progress(1);
         },
       }],
-    extra: async ({ check, bot, until, wait, metric }) => {
+    extra: async ({ check, bot, until, wait, metric, event }) => {
       await check('The arena is a lit backdrop with drifting fireflies, and a grid ripple spread when the second player joined', async () => {
         const v = hawkesDemoView().scene;
         if (!v.lit || v.fireflies < 10) throw new Error(`backdrop not lit or no fireflies: ${JSON.stringify(v)}`);

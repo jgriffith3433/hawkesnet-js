@@ -21,14 +21,14 @@
 //     shownPos: (id) => [x, y, z] | null,                 // where this page draws another player
 //     botPose: (u) => [x, y, z],                          // the second player's path, u from 0 to 1 (it stops at 1)
 //     tolerance: 0.02,                                    // "the same place", in the page's units
-//     extra: async (c) => {},                             // optional more checks: c.check(name, fn), c.main, c.bot
+//     extra: async (c) => {},                             // optional more checks: c.check(name, fn), c.main, c.bot, c.event, c.until, c.wait
 //     ready: () => true,                                  // optional: the page is ready to play (default: main() exists)
 //     beforeBot: async (c) => {},                         // optional: smoke checks while still alone, before openBot(); c has
 //                                                         // check, main, until, wait, metric, event, progress, step, log
 //     afterTwoPlayers: async (c) => {},                   // optional: more two-players checks after the messages check; c has
 //                                                         // check, main, other, until, wait, metric, roundTrips, openBot, event, step
 //     scenarios: [{ id, title, seconds, tags, description,  // optional more scenarios of this page's own:
-//       run: async (c) => {} }],                          //   c.check(name, fn), c.until, c.wait, c.metric, c.progress
+//       run: async (c) => {} }],                          //   c.check(name, fn), c.until, c.wait, c.metric, c.progress, c.event, c.step, c.log
 //   });
 
 export function installNetPlaytest(o) {
@@ -190,7 +190,7 @@ export function installNetPlaytest(o) {
       return `round trip ${a} ms / ${b} ms`;
     });
     progress(0.8);
-    if (o.extra) await o.extra({ check, main, bot, until, wait, metric, roundTrips: (f, w, t) => roundTrips(f, w, t) });
+    if (o.extra) await o.extra({ check, main, bot, until, wait, metric, event, progress, step, roundTrips: (f, w, t) => roundTrips(f, w, t) });
     await check('The second player left and this page saw it', async () => {
       const id = bot.id;
       await bot.leave();
@@ -204,7 +204,7 @@ export function installNetPlaytest(o) {
   }
 
   async function custom(sc) {
-    await sc.run({ check, until, wait, metric, progress, log });
+    await sc.run({ check, until, wait, metric, progress, log, event, step, options: run?.options || {} });
     finish(run.lines.every((l) => l.ok) ? 'won' : 'lost');
   }
 
