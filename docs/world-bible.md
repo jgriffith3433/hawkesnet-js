@@ -32,3 +32,7 @@ Ambient: grid floor, soft light, player trails; reconnect and away are shown thr
 2. **Meet someone** — a second tab or the smoke bot joins; colours, trails and Tag play between you.
 3. **Drop and hold** — a lost socket freezes your blob under Reconnecting… (spotlight dims, fireflies hush, a soft down-tone); when the link returns the banner says Back in the room for two seconds with a recovery chime, then Connected. A peer who drops stays ghosted with “away” and a slow pulse at their last spot (fireflies slow) for the grace, then is gone or back as themselves (same name and colour from this tab’s memory).
 4. **Poke the floor** — a tap or click on the canvas rings the grid (local ripple), a second verb beside Tag chase.
+
+## Drop and hold: how it is played (playtest)
+
+The `reconnect` scenario plays the drop on the page: a second player keeps posing (a player is drawn once it has sent a pose), this tab is dropped with `hawkesPlaytest.dropFor(ms)`, and the Reconnecting… banner is held on screen for desktop and for a 390 px frame before Back in the room (2 s), then the other player is dropped and shown ghosted at 40% with “away” until the 15 s grace removes them.
