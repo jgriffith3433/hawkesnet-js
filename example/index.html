@@ -787,7 +787,14 @@ net.join('quickstart');</pre>
       target._connect = real;
       return real.call(this, q);
     };
-    try { target.ws?.close(); } catch { /* already down */ }
+    // Close the socket and tell the SDK at once, the way a dead link reads: a real close handshake can take half a second or
+    // more on a slow link, and the banner is driven by the SDK's own 'reconnecting' event, so wait for nothing here.
+    const ws = target.ws;
+    if (ws) {
+      const onclose = ws.onclose;
+      try { ws.close(); } catch { /* already down */ }
+      try { onclose?.call(ws, { code: 1006, reason: 'dropFor' }); } catch { /* the SDK ignores a socket it already let go */ }
+    }
   };
   const playtestApi = installNetPlaytest({
     product: 'hawkes-net-js',
@@ -1024,7 +1031,7 @@ net.join('quickstart');</pre>
       hash: async (t) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, '0')).join('') }),
       startScenario({ lobby, opts }),
       {
-        id: 'reconnect', title: 'A drop shows Reconnecting, Back in the room for 2 s, ghosts the dropped player for 15 s, keeps name and colour', seconds: 70, tags: ['full'],
+        id: 'reconnect', title: 'A drop shows Reconnecting, Back in the room for 2 s, ghosts the dropped player for 15 s, keeps name and colour', seconds: 100, tags: ['full'],
         description: 'Opens a second player in js-demo. Drops this tab with hawkesPlaytest.dropFor: the banner says Reconnecting within 1 s and the own dot stays frozen; on return Back in the room holds about 2 s then clears. Then drops the other player for longer than the 15 s grace: it is drawn at 40% with away, and removed only after 15 s. Name and colour match sessionStorage after the rejoin.',
         run: async ({ check, until, wait, metric, event }) => {
           const banner = () => ({ state: bannerEl.dataset.state, text: bannerEl.textContent });
@@ -1039,18 +1046,21 @@ net.join('quickstart');</pre>
             await check('Within 1 s of the drop the tab says Reconnecting and its own dot stays frozen', async () => {
               const was = { x: me.x, y: me.y };
               const t0 = performance.now();
-              window.hawkesPlaytest.dropFor(7000);
+              window.hawkesPlaytest.dropFor(9000);
               await until(() => banner().state === 'reconnecting', 1000, () => `Reconnecting within 1 s (it says "${banner().text}")`);
-              metric('reconnectingMs', Math.round(performance.now() - t0));
+              const bannerMs = Math.round(performance.now() - t0); // measured once, here: the numbers below are not the time of the later holds
+              metric('reconnectingMs', bannerMs);
+              // Hold the state on screen: Studio takes a screenshot at every event, so the desktop capture is of Reconnecting.
+              event('shot:reconnecting:desktop', `${banner().text} at ${innerWidth}px wide`);
               areaPointer(Math.min(0.95, me.x + 0.2), Math.min(0.95, me.y + 0.2)); await wait(300);
               if (Math.hypot(me.x - was.x, me.y - was.y) > 0.001) throw new Error('own dot moved while down');
               if (!view().dots.find((d) => d.key === 'me')?.frozen) throw new Error('own dot is not marked frozen while down');
-              // Hold the state on screen (events make Studio take screenshots): this one is the desktop capture.
-              event('shot:reconnecting:desktop', `${banner().text} at ${innerWidth}px wide`);
-              await wait(1200);
-              if (banner().state !== 'reconnecting') throw new Error(`the banner left Reconnecting after ${Math.round(performance.now() - t0)} ms while the link was still blocked (${banner().state})`);
-              event('banner:reconnecting', banner().text);
-              return `${banner().text} after ${Math.round(performance.now() - t0)} ms, dot frozen`;
+              for (let i = 0; i < 3; i++) {
+                await wait(900);
+                if (banner().state !== 'reconnecting') throw new Error(`the banner left Reconnecting ${Math.round(performance.now() - t0)} ms after the drop while the link was still blocked (${banner().state})`);
+                event('banner:reconnecting', `${banner().text} (${Math.round(performance.now() - t0)} ms after the drop, dot frozen)`);
+              }
+              return `${banner().text} ${bannerMs} ms after the drop, dot frozen`;
             });
             await check('When the network returns, Back in the room shows for 2 s and then clears', async () => {
               await until(() => banner().state === 'back', 20000, () => `Back in the room (it says "${banner().text}")`);
@@ -1090,12 +1100,14 @@ net.join('quickstart');</pre>
                 w.hawkesPlaytest.dropFor(5000);
                 await until(() => fb().state === 'reconnecting', 1000, () => `Reconnecting within 1 s at 390 px (it says "${fb().text}")`);
                 if (w.innerWidth > 420 && phone === false) throw new Error(`the frame is ${w.innerWidth}px wide, not 390`);
-                event('shot:reconnecting:390px', `${fb().text} at ${w.innerWidth}px wide`);
-                await wait(1500);
-                if (fb().state !== 'reconnecting') throw new Error(`the 390 px banner left Reconnecting early (${fb().state})`);
+                metric('reconnecting390Ms', Math.round(performance.now() - t0));
+                for (let i = 0; i < 3; i++) { // held for a few events, so Studio's screenshots catch the 390 px Reconnecting state
+                  await wait(700);
+                  if (fb().state !== 'reconnecting') throw new Error(`the 390 px banner left Reconnecting early (${fb().state})`);
+                  event('shot:reconnecting:390px', `${fb().text} at ${w.innerWidth}px wide`);
+                }
                 const b = w.document.getElementById('banner').getBoundingClientRect();
                 if (b.right > w.innerWidth + 1 || b.left < -1) throw new Error('the banner runs outside the 390 px width');
-                metric('reconnecting390Ms', Math.round(performance.now() - t0));
                 await until(() => fb().state === 'back', 20000, 'Back in the room at 390 px');
                 event('shot:back:390px', fb().text);
                 return `${fb().text} at ${w.innerWidth}px wide`;
