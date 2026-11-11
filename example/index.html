@@ -29,7 +29,7 @@
   #banner b { color: var(--c); }
   #banner small { display: block; color: var(--muted); }
   #banner[data-state=connecting], #banner[data-state=reconnecting] { --c: #ffd84d; }
-  #banner[data-state=online] { --c: #9fe870; }
+  #banner[data-state=online], #banner[data-state=back] { --c: #9fe870; }
   #banner[data-state=offline], #banner[data-state=full] { --c: #ff8a80; }
   #quick { position: fixed; left: 284px; right: 12px; bottom: 12px; z-index: 10; max-width: 720px; max-height: calc(100% - 24px); overflow: auto; background: rgba(11,15,20,.94); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
   #quick a { color: var(--link); }
@@ -211,7 +211,16 @@ net.join('quickstart');</pre>
   const endpoint = q.get('net') || undefined;
   document.getElementById('net').dataset.version = VERSION;
   document.getElementById('net').textContent = `@hawkesgen/net ${VERSION} on ` + (endpoint || globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, '');
-  const name = 'Player ' + Math.floor(Math.random() * 900 + 100);
+  // Name and colour stick in this tab (sessionStorage) so a fresh-ticket rejoin still looks like the same player.
+  const SELF_KEY = 'hawkes-net-demo-self';
+  const YOU = '#ffd84d';
+  const loadSelf = () => { try { return JSON.parse(sessionStorage.getItem(SELF_KEY) || '{}') || {}; } catch { return {}; } };
+  const saveSelf = (s) => { try { sessionStorage.setItem(SELF_KEY, JSON.stringify(s)); } catch { /* private mode */ } };
+  const saved = loadSelf();
+  const name = (typeof saved.name === 'string' && saved.name.trim()) ? saved.name.trim().slice(0, 32)
+    : ('Player ' + Math.floor(Math.random() * 900 + 100));
+  const myColor = (typeof saved.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(saved.color)) ? saved.color : YOU;
+  saveSelf({ name, color: myColor });
   // No liveHosts: every page gets the project's free test rooms.
   // Only name an endpoint when asked: an endpoint given as undefined would override the SDK's default.
   const opts = { project: q.get('project') || 'netdemo', transport: 'relay', ...(endpoint ? { endpoint } : {}) };
@@ -235,15 +244,15 @@ net.join('quickstart');</pre>
   const areaLeft = () => { if (stacked()) return 0; const b = box(); return Math.min(b.width * 0.6, Math.ceil(sideEl.getBoundingClientRect().right - b.left) + 16); };
   const areaPx = (x) => { const b = box(), L = areaLeft(); return b.left + L + x * (b.width - L); };
   const yPx = (y) => { const b = box(); return b.top + y * b.height; };
-  // Every player gets their own colour: you are amber, everyone else takes the first palette colour nobody here has. All of
-  // them are at least 3:1 against the page (AA for graphics); the playtest measures it.
-  const YOU = '#ffd84d';
+  // Every player gets their own colour: you keep `myColor` (amber by default, remembered in sessionStorage); everyone else
+  // takes the first palette colour nobody here has. All of them are at least 3:1 against the page (AA for graphics).
   const PALETTE = ['#5ec8ff', '#ff7eb6', '#9fe870', '#c39bff', '#ff9a52', '#3ee0c0', '#ff6b6b', '#f2f2f2'];
   const colors = new Map();
   const colorFor = (id) => {
+    if (id === net.id) return myColor;
     let c = colors.get(id);
     if (c) return c;
-    const used = new Set(colors.values());
+    const used = new Set([myColor, ...colors.values()]);
     c = PALETTE.find((x) => !used.has(x));
     for (let i = 0; !c; i++) { const x = `hsl(${Math.round((i * 137.5) % 360)} 85% 70%)`; if (!used.has(x)) c = x; }
     colors.set(id, c);
@@ -361,41 +370,59 @@ net.join('quickstart');</pre>
   setLag(glide.lagMs);
   document.getElementById('who').textContent = name;
 
-  // The banner: the connection in plain words. It is drawn only inside the SDK's events (status, joined, transport),
-  // never on a timer. `bannerLog` keeps what it said, in order, for the playtest.
+  // The banner: the connection in plain words, driven only by the SDK's status / joined / transport / left events
+  // (no polling). After a drop, "Back in the room" holds for 2 s once (one-shot settle timer), then Connected again.
   const bannerEl = document.getElementById('banner');
   const bannerLog = [];
   let bannerRenders = 0, bannerEvents = 0;
+  let wasDown = false, backT = 0;
   const WORDS = {
     off: ['Not connected', 'Not in a room yet.'],
     connecting: ['Connecting…', 'Reaching Hawkes Net.'],
-    reconnecting: ['Connection lost. Reconnecting…', 'The game keeps going. Messages you send meanwhile are sent again once you are back.'],
+    reconnecting: ['Reconnecting…', 'Hold on, your place in the room is kept.'],
+    back: ['Back in the room', ''],
     offline: ['Offline', 'Could not reach the room. This page keeps trying.'],
     full: ['This room is full', 'Trying the next one.'],
   };
-  function words() {
-    const status = net.status;
+  function words(why = '') {
+    let status = net.status;
+    if (status === 'reconnecting') wasDown = true;
+    else if (status === 'online' && wasDown) {
+      wasDown = false;
+      status = 'back';
+      clearTimeout(backT);
+      backT = setTimeout(() => renderBanner('settled'), 2000);
+    } else if (status === 'online' && bannerEl.dataset.state === 'back' && why !== 'settled') {
+      status = 'back'; // hold until the settle timer fires
+    }
     if (status !== 'online') return [status, ...(WORDS[status] || [status, ''])];
     const t = net.room?.transport;
     return ['online', 'Connected', t === 'relay' ? 'Through a Hawkes relay: it carries every message, in order.' : t === 'p2p' ? 'Straight to the other players (peer to peer).' : 'In the room.'];
   }
+  let onBannerState = () => {}; // wired after WebAudio helpers exist: soft cues for drop / return
   function renderBanner(why) {
     bannerEvents++;
-    const [state, head, detail] = words();
-    const text = `${head}. ${detail}`;
+    const [state, head, detail] = words(why);
+    const text = detail ? `${head}. ${detail}` : head;
     if (bannerEl.dataset.state === state && bannerEl.textContent === text) return;
+    const prev = bannerEl.dataset.state;
     bannerEl.dataset.state = state;
     bannerEl.innerHTML = `<b></b><small></small>`;
     bannerEl.firstChild.textContent = head; bannerEl.lastChild.textContent = detail;
     bannerRenders++;
-    bannerLog.push({ state, head, detail, why });
+    bannerLog.push({ state, head, detail, why, at: performance.now() });
+    if (bannerLog.length > 40) bannerLog.shift();
+    if (state !== prev) onBannerState(state);
   }
   for (const ev of ['status', 'joined', 'transport', 'left']) net.when(ev, () => renderBanner(ev));
   renderBanner('start');
+  window.hawkesNetBanner = () => ({ state: bannerEl.dataset.state || '', text: bannerEl.textContent || '', log: bannerLog.slice() });
   // The dot follows the pointer. On a wide window that is the mouse anywhere over the page. On a phone the page scrolls, so
   // only the canvas moves it: the mouse over it, or a finger (or pen) pressed on it and dragged or tapped (pointer events).
+  // While reconnecting, the own blob freezes where it is (pointer input is ignored until the link is back).
   let activePointerId = null;
   const move = (e) => {
+    if (net.status === 'reconnecting') return;
     if (stacked() && !(e.pointerId === activePointerId || (e.target === c && e.pointerType === 'mouse'))) return;
     const b = box(), L = areaLeft();
     me.x = Math.max(0, Math.min(1, (e.clientX - b.left - L) / (b.width - L))); me.y = Math.max(0, Math.min(1, (e.clientY - b.top) / b.height));
@@ -405,6 +432,12 @@ net.join('quickstart');</pre>
   addEventListener('pointerdown', (e) => {
     if (e.target === c) { activePointerId = e.pointerId; try { c.setPointerCapture(e.pointerId); } catch { /* a synthetic pointer */ } }
     move(e);
+    // Poke the floor: a local ripple at the tap (a second verb beside Tag), even while reconnecting freezes the blob.
+    if (e.target === c) {
+      const b = box(), L = areaLeft(), d = dpr();
+      const cx = (e.clientX - b.left) * d, cy = (e.clientY - b.top) * d;
+      if (cx >= L * d) { ripples.push({ x: cx, y: cy, t0: performance.now() }); scene.rippleTotal = (scene.rippleTotal || 0) + 1; }
+    }
   });
   for (const t of ['pointerup', 'pointercancel']) addEventListener(t, (e) => { if (e.pointerId === activePointerId) activePointerId = null; });
   // For Studio's playtest: where this page's dot is, who is It, and whether the page is laid out as a phone (read-only).
@@ -432,6 +465,9 @@ net.join('quickstart');</pre>
   const confetti = []; // { x, y, vx, vy, color, rot, spin, life }
   window.hawkesDemoView = () => ({
     me: { ...me }, stacked: stacked(), version: VERSION, scene: { ...scene },
+    identity: { name, color: myColor },
+    banner: window.hawkesNetBanner?.() || null,
+    reconnecting: net.status === 'reconnecting',
     tag: tag.snapshot(), bots: bots.snapshot(), dots: drawnDots,
     round: {
       remainingMs: tag.remainingMs(), phase: tag.phase, winner: tag.winner, round: tag.round,
@@ -494,6 +530,10 @@ net.join('quickstart');</pre>
     fanfarePlayed = true;
     [523, 659, 784, 1046].forEach((f, i) => beep(f, 0.18, 'square', 0.05, i * 0.12));
   }
+  onBannerState = (state) => {
+    if (state === 'reconnecting') beep(160, 0.14, 'sine', 0.05);
+    else if (state === 'back') { beep(420, 0.07, 'triangle', 0.06); beep(640, 0.1, 'sine', 0.05, 0.05); }
+  };
   function nameForId(id) {
     if (!id) return 'Nobody';
     if (id === net.id) return name + ' (you)';
@@ -505,7 +545,7 @@ net.join('quickstart');</pre>
   function spawnTagBurst(id) {
     const L = areaLeft() * dpr();
     let cx = L + 0.5 * (c.width - L), cy = 0.5 * c.height, color = '#9fe870';
-    if (id === net.id) { cx = L + me.x * (c.width - L); cy = me.y * c.height; color = YOU; }
+    if (id === net.id) { cx = L + me.x * (c.width - L); cy = me.y * c.height; color = myColor; }
     else {
       const o = others.get(id);
       if (o) { cx = L + o.x * (c.width - L); cy = o.y * c.height; color = colorFor(id); }
@@ -520,7 +560,7 @@ net.join('quickstart');</pre>
   }
   function spawnConfetti() {
     const L = areaLeft() * dpr(), aw = Math.max(1, c.width - L);
-    const cols = [YOU, '#9fe870', '#5ec8ff', '#ff7eb6', '#ff9a52', '#c39bff'];
+    const cols = [myColor, '#9fe870', '#5ec8ff', '#ff7eb6', '#ff9a52', '#c39bff'];
     for (let i = 0; i < 64; i++) {
       confetti.push({
         x: L + Math.random() * aw, y: -10 - Math.random() * 40,
@@ -725,7 +765,19 @@ net.join('quickstart');</pre>
       return `${targetId} stayed It through ${tag.IMMUNE_MS} ms immunity; time as It: ${prevTime} ms / ${newTime} ms`;
     });
   };
-  installNetPlaytest({
+  // Test hook: close the socket and refuse reconnects for `ms` (the SDK's own backoff then brings it back).
+  const dropFor = (room, ms) => {
+    if (!room) throw new Error('dropFor: no room');
+    const target = room.room || room; // Lobby → Room, or Room itself
+    const real = target._connect, until = performance.now() + ms;
+    target._connect = function (q) {
+      if (performance.now() < until) return this._lost(1006, 'blocked by dropFor');
+      target._connect = real;
+      return real.call(this, q);
+    };
+    try { target.ws?.close(); } catch { /* already down */ }
+  };
+  const playtestApi = installNetPlaytest({
     product: 'hawkes-net-js',
     where: (endpoint || globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, ''),
     main: () => net,
@@ -1056,17 +1108,51 @@ net.join('quickstart');</pre>
           if (a < 0 || b < a) throw new Error(`expected connecting then online, the banner showed: ${seen.join(', ')}`);
           return seen.join(' > ');
         });
-        await check('Losing the connection shows reconnecting, then connected again', async () => {
-          const ws = net.room?.ws; // setup shortcut: drop this page's socket, as a network blip would
-          if (!ws) throw new Error('no socket to drop');
-          ws.close(4000, 'playtest');
-          await until(() => banner().state === 'reconnecting', 5000, () => `the banner to say reconnecting (it says "${banner().text}")`);
+        await check('A drop shows Reconnecting within 1 s, then Back in the room', async () => {
+          const beforeId = { name, color: myColor, frozenAt: { x: me.x, y: me.y } };
+          dropFor(net.room, 4000);
+          await until(() => banner().state === 'reconnecting', 1000, () => `the banner to say Reconnecting within 1 s (it says "${banner().text}")`);
           const lost = banner().text;
-          await until(() => banner().state === 'online', 25000, () => `the banner to say connected again (it says "${banner().text}")`);
-          await until(() => net.room && net.room.peers.has(bot.id) , 15000, 'the second player to be back in view');
-          return lost;
+          if (!/Reconnecting/.test(lost)) throw new Error(`expected Reconnecting…, got "${lost}"`);
+          // Own blob freezes while down (pointer moves are ignored).
+          areaPointer(Math.min(0.95, me.x + 0.2), Math.min(0.95, me.y + 0.2));
+          await wait(120);
+          if (Math.hypot(me.x - beforeId.frozenAt.x, me.y - beforeId.frozenAt.y) > 0.001) throw new Error('own blob moved while reconnecting');
+          let reconnectAt = 0;
+          for (let i = bannerLog.length - 1; i >= 0; i--) if (bannerLog[i].state === 'reconnecting') { reconnectAt = bannerLog[i].at; break; }
+          if (reconnectAt) metric('reconnectBannerMs', Math.round(performance.now() - reconnectAt));
+          event('banner:reconnecting', lost);
+          await until(() => banner().state === 'back', 20000, () => `Back in the room (it says "${banner().text}")`);
+          event('banner:back', banner().text);
+          await until(() => banner().state === 'online', 5000, () => `Connected again after Back settles (it says "${banner().text}")`);
+          await until(() => net.room && net.room.peers.has(bot.id), 15000, 'the second player to be back in view');
+          const after = hawkesDemoView().identity;
+          if (after.name !== beforeId.name || after.color !== beforeId.color) {
+            throw new Error(`identity changed after rejoin: was ${beforeId.name}/${beforeId.color}, now ${after.name}/${after.color}`);
+          }
+          metric('identityKept', 1);
+          event('identity:kept', `${after.name}:${after.color}`);
+          return `${lost} → Back in the room; identity ${after.name} ${after.color}`;
+        });
+        await check('A peer that drops stays ghosted with away, then returns', async () => {
+          if (!bot?.room) throw new Error('no bot room to drop');
+          dropFor(bot.room, 5000);
+          await until(() => {
+            const d = (hawkesDemoView().dots || []).find((x) => x.id === bot.id);
+            return d && d.away && d.alpha <= 0.4;
+          }, 4000, 'the other player ghosted at 40% with away');
+          const ghost = (hawkesDemoView().dots || []).find((x) => x.id === bot.id);
+          event('peer:ghosted', `${bot.id}:alpha=${ghost?.alpha}`);
+          metric('ghostAlpha', ghost?.alpha ?? 0);
+          await until(() => {
+            const d = (hawkesDemoView().dots || []).find((x) => x.id === bot.id);
+            return d && !d.away && d.alpha === 1;
+          }, 25000, 'the other player normal again');
+          event('peer:returned', bot.id);
+          return 'ghosted, then normal';
         });
         await check('The banner changes only when the SDK reports a change (events, not a timer)', async () => {
+          await until(() => banner().state === 'online', 5000, 'banner settled on Connected before the no-timer check');
           const before = bannerRenders;
           await wait(1500);
           if (bannerRenders !== before) throw new Error('the banner redrew with no event');
@@ -1175,7 +1261,7 @@ net.join('quickstart');</pre>
             const bgc = backdrop(el), r = ratio(over(fg, bgc), bgc); n++; worst = Math.min(worst, r);
             if (r < 4.5 * (parseFloat(cs.opacity) === 1 ? 1 : 1.2)) bad.push(`${el.id || el.className || el.tagName} ${r.toFixed(2)}`);
           }
-          const dotsBad = [YOU, ...PALETTE].map((h) => [h, ratio(parse(`rgb(${[1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(',')})`), floor)]).filter(([, r]) => r < 3);
+          const dotsBad = [myColor, ...PALETTE].map((h) => [h, ratio(parse(`rgb(${[1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(',')})`), floor)]).filter(([, r]) => r < 3);
           const ratios = (rows().map((r) => r.color));
           metric('textElementsChecked', n); metric('worstTextContrast', Math.round(worst * 100) / 100);
           if (bad.length) throw new Error(`text under 4.5:1: ${bad.join(', ')}`);
@@ -1226,7 +1312,7 @@ net.join('quickstart');</pre>
             areaPointer(0.15 + Math.min(0.7, k * 0.035), 0.55);
             k++;
             const d = mine();
-            return d && d.color === YOU && d.eyes === 2 && d.stretch > 1.08 && d.lookX > 0.55;
+            return d && d.color === myColor && d.eyes === 2 && d.stretch > 1.08 && d.lookX > 0.55;
           }, 5000, 'eyes looking right while the blob stretches to the right');
           const right = mine();
           areaPointer(right ? me.x : 0.5, 0.2); await wait(80);
@@ -1282,6 +1368,8 @@ net.join('quickstart');</pre>
       } finally { clearInterval(feed); }
     },
   });
+  playtestApi.dropFor = (ms = 5000, who = 'me') => dropFor(who === 'me' ? net : who, ms);
+  window.hawkesPlaytest.dropFor = playtestApi.dropFor;
   // Real install replaced the stub: mark upgrade time, and hand off a Studio start() that arrived while still stubbing.
   // ?playtest=<id> is already started inside installNetPlaytest — skip a duplicate for the same id.
   if (window.__hawkesDemoBoot) {
@@ -1315,17 +1403,17 @@ net.join('quickstart');</pre>
     const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, Math.max(lo, hi)));
     const discs = dots.map((o) => ({ x: o.cx - R, y: o.cy - R, w: 2 * R, h: 2 * R }));
     return dots.map((o, i) => {
-      const w = g.measureText(o.label).width + 8 * d, row = h + pad;
+      const w = g.measureText(o.label).width + 8 * d, row = h + pad + (o.away ? 12 * d : 0);
       const cands = [[-w / 2, -R - gap - h], [R + gap, -h / 2], [-R - gap - w, -h / 2], [-w / 2, R + gap], [R + gap, -R - h], [-R - gap - w, -R - h], [R + gap, R], [-R - gap - w, R]];
       for (let k = 1; k <= dots.length + 3; k++) for (const sgn of [1, -1]) { cands.push([R + gap, sgn * k * row - h / 2], [-R - gap - w, sgn * k * row - h / 2]); }
       let pick = null;
       for (const [dx, dy] of cands) {
-        const r = { x: clamp(o.cx + dx, L, W - w), y: clamp(o.cy + dy, 0, H - h), w, h };
+        const r = { x: clamp(o.cx + dx, L, W - w), y: clamp(o.cy + dy, 0, H - h - (o.away ? 12 * d : 0)), w, h };
         if (!placed.some((p) => hit(r, p, pad)) && !discs.some((q, j) => j !== i && hit(r, q))) { pick = r; break; }
       }
       pick ||= { x: clamp(o.cx - w / 2, L, W - w), y: clamp(o.cy - R - gap - h, 0, H - h), w, h };
       placed.push(pick);
-      return { ...pick, label: o.label };
+      return { ...pick, label: o.label, away: Boolean(o.away) };
     });
   }
   // The shop window: a dark floor with a soft spotlight and a dotted grid, so the players are the only bright things on it.
@@ -1342,11 +1430,19 @@ net.join('quickstart');</pre>
   const TAG_BURST_MS = 450;
   function drawBackdrop(W, H, d, t, L) {
     scene.reducedMotion = reduceMq.matches;
-    const mo = scene.reducedMotion ? 0 : 1, aw = W - L;
+    const someoneAway = drawnDots.some((x) => x.away);
+    const linkDown = net.status === 'reconnecting';
+    scene.lit = !linkDown;
+    // Soften the room while reconnecting or anyone is ghosted (fireflies slow; spotlight dims when you are down).
+    let mo = scene.reducedMotion ? 0 : 1;
+    if (someoneAway) mo *= 0.35;
+    if (linkDown) mo *= 0.15;
+    const aw = W - L;
     g.fillStyle = '#0b0f14'; g.fillRect(0, 0, W, H);
     const cx = L + aw / 2, cy = H * 0.45, R = Math.max(aw, H) * 0.7;
+    const light = linkDown ? 0.45 : someoneAway ? 0.75 : 1;
     const bg = g.createRadialGradient(cx, cy, 0, cx, cy, R);
-    bg.addColorStop(0, 'rgba(159,232,112,.13)'); bg.addColorStop(0.35, 'rgba(127,179,255,.07)'); bg.addColorStop(1, 'rgba(11,15,20,0)');
+    bg.addColorStop(0, `rgba(159,232,112,${0.13 * light})`); bg.addColorStop(0.35, `rgba(127,179,255,${0.07 * light})`); bg.addColorStop(1, 'rgba(11,15,20,0)');
     g.fillStyle = bg; g.fillRect(0, 0, W, H);
     const step = 40 * d;
     g.fillStyle = 'rgba(167,175,187,.14)';
@@ -1455,7 +1551,14 @@ net.join('quickstart');</pre>
     return it ? `${base} · It` : base;
   };
   function renderList(dots) {
-    const rows = dots.map((o) => ({ key: o.key, name: o.name, color: o.color, kind: kindOf(o.key, o.it, o.bot), it: o.it }));
+    const rows = dots.map((o) => ({
+      key: o.key,
+      name: o.away ? `${o.name} (away)` : o.name,
+      color: o.color,
+      kind: kindOf(o.key, o.it, o.bot),
+      it: o.it,
+      away: Boolean(o.away),
+    }));
     const sig = JSON.stringify(rows);
     if (sig === listSig) return;
     listSig = sig;
@@ -1471,7 +1574,8 @@ net.join('quickstart');</pre>
         const kd = document.createElement('span'); kd.className = 'kind';
         li.append(sw, nm, kd); listEl.append(li);
       }
-      li.dataset.color = r.color; li.dataset.kind = r.kind; li.dataset.it = r.it ? '1' : '0';
+      li.dataset.color = r.color; li.dataset.kind = r.kind; li.dataset.it = r.it ? '1' : '0'; li.dataset.away = r.away ? '1' : '0';
+      li.style.opacity = r.away ? '0.4' : '';
       li.querySelector('.sw').style.background = r.color;
       li.querySelector('.nm').textContent = r.name;
       li.querySelector('.kind').textContent = r.kind;
@@ -1486,27 +1590,31 @@ net.join('quickstart');</pre>
     const cb = box(), cw = Math.round(cb.width * d), ch = Math.round(cb.height * d);
     if (c.width !== cw) c.width = cw; if (c.height !== ch) c.height = ch; // resizing every frame reallocates the canvas
     const myName = name + ' (you)', meIt = tag.isIt(net.id);
-    const dots = [{ key: 'me', id: net.id, cx: (L + me.x * (c.width - L)), cy: me.y * c.height, color: YOU, name: myName, label: tag.labelFor(net.id, myName), it: meIt, bot: false }]; // you first: your label gets the best spot
+    const meAway = false; // this page is never ghosted on its own canvas; reconnect freezes the blob instead
+    const dots = [{ key: 'me', id: net.id, cx: (L + me.x * (c.width - L)), cy: me.y * c.height, color: myColor, name: myName, label: tag.labelFor(net.id, myName), it: meIt, bot: false, away: meAway, alpha: 1, frozen: net.status === 'reconnecting' }]; // you first: your label gets the best spot
     // Each blob follows its Track's point with a short ease (FOLLOW_MS): when the network hiccups and the Track corrects
-    // its guess, the blob slides there over a few frames instead of jumping.
+    // its guess, the blob slides there over a few frames instead of jumping. A peer marked away (dropped socket / tab
+    // hidden) stays at its last spot, drawn ghosted, until the server's 15 s grace ends with peer:leave.
     const tNow = performance.now(), ease = 1 - Math.exp(-(tNow - lastFrame) / FOLLOW_MS);
     const frameAt = lastFrame; lastFrame = tNow;
     for (const [id, t] of tracks) {
       const p = net.peers.get(id);
       if (!p) { tracks.delete(id); others.delete(id); blobs.delete(id); continue; }
       const v = smooth ? t.sample() : t.newest?.v;
-      if (!v) continue;
       let o = others.get(id);
-      if (!o) justSet.add(id); // first pose: the blob is set at its spot, not moved there
-      if (!o || !smooth) others.set(id, (o = { x: v[0], y: v[1] }));
-      else {
-        let dx = (v[0] - o.x) * ease, dy = (v[1] - o.y) * ease;
-        const cap = MAX_SPEED * (tNow - frameAt) / 1000, len = Math.hypot(dx, dy);
-        if (len > cap) { dx *= cap / len; dy *= cap / len; }
-        o.x += dx; o.y += dy;
+      if (v) {
+        if (!o) justSet.add(id); // first pose: the blob is set at its spot, not moved there
+        if (!o || !smooth) others.set(id, (o = { x: v[0], y: v[1] }));
+        else if (!p.away) {
+          let dx = (v[0] - o.x) * ease, dy = (v[1] - o.y) * ease;
+          const cap = MAX_SPEED * (tNow - frameAt) / 1000, len = Math.hypot(dx, dy);
+          if (len > cap) { dx *= cap / len; dy *= cap / len; }
+          o.x += dx; o.y += dy;
+        }
       }
-      const peerName = p.name || id, peerIt = tag.isIt(id);
-      dots.push({ key: id, id, cx: L + o.x * (c.width - L), cy: o.y * c.height, color: colorFor(id), name: peerName, label: tag.labelFor(id, peerName), it: peerIt, bot: false });
+      if (!o) continue;
+      const peerName = p.name || id, peerIt = tag.isIt(id), away = Boolean(p.away);
+      dots.push({ key: id, id, cx: L + o.x * (c.width - L), cy: o.y * c.height, color: colorFor(id), name: peerName, label: tag.labelFor(id, peerName), it: peerIt, bot: false, away, alpha: away ? 0.4 : 1, frozen: false });
     }
     // Host-local filler bots (shared state): drawn like peers, labelled "Bot", never real lobby peers.
     for (const b of bots.list()) {
@@ -1531,31 +1639,49 @@ net.join('quickstart');</pre>
     drawBackdrop(c.width, c.height, d, tNow, L);
     scene.glowBlobs = dots.length;
     for (const o of dots) trailPush(o.key, (o.cx - L) / (c.width - L), o.cy / c.height, tNow, justSet.delete(o.key));
-    for (const o of dots) drawTrail(o, c.width, c.height, d, tNow, L);
+    for (const o of dots) {
+      g.save();
+      if (o.away) g.globalAlpha = 0.4;
+      drawTrail(o, c.width, c.height, d, tNow, L);
+      g.restore();
+    }
     const pulse = 0.5 + 0.5 * Math.sin(tNow / 180);
     for (const o of dots) {
       const nx = (o.cx - L) / Math.max(1, c.width - L), ny = o.cy / c.height;
       const st = updateBlob(o.key, nx, ny, tNow);
+      const alpha = o.away ? 0.4 : 1;
+      g.save();
+      g.globalAlpha = alpha;
       if (o.it) {
         const ringR = (20 + 6 * pulse) * d;
-        g.save();
         g.beginPath();
         g.arc(o.cx, o.cy, ringR, 0, Math.PI * 2);
         g.strokeStyle = o.color;
-        g.globalAlpha = 0.55 + 0.35 * pulse;
+        g.globalAlpha = alpha * (0.55 + 0.35 * pulse);
         g.lineWidth = (2.5 + 1.5 * pulse) * d;
         g.shadowColor = o.color;
         g.shadowBlur = (22 + 12 * pulse) * d;
         g.stroke();
-        g.restore();
         o.ringRadius = ringR / d;
         o.glowing = true;
       } else {
         o.ringRadius = 0;
         o.glowing = false;
       }
+      g.globalAlpha = alpha;
       drawGlow(o, d);
       drawBlob(o, d, tNow, st);
+      if (o.away) {
+        // Soft idle stir at a ghosted peer's last spot so "away" is felt in the room, not only as opacity.
+        const pulseAway = 0.5 + 0.5 * Math.sin(tNow / 420);
+        g.beginPath();
+        g.arc(o.cx, o.cy, (BLOB_R + 6 + 3 * pulseAway) * d, 0, Math.PI * 2);
+        g.strokeStyle = o.color;
+        g.globalAlpha = 0.2 + 0.15 * pulseAway;
+        g.lineWidth = 1.5 * d;
+        g.stroke();
+      }
+      g.restore();
     }
     // Tag ring bursts (expanding rings at the newly tagged player).
     for (let i = tagBursts.length - 1; i >= 0; i--) {
@@ -1595,17 +1721,28 @@ net.join('quickstart');</pre>
     scene.confettiCount = confetti.length;
     drawnDots = dots.map((o) => ({
       key: o.key, id: o.id, label: o.label, name: o.name, color: o.color, it: o.it, bot: !!o.bot, glowing: o.glowing, ringRadius: o.ringRadius,
+      away: Boolean(o.away), alpha: o.away ? 0.4 : 1, frozen: Boolean(o.frozen),
       lookX: o.lookX, lookY: o.lookY, stretch: o.stretch, squash: o.squash, squashed: o.squashed, blinking: o.blinking, blinked: o.blinked, breath: o.breath, eyes: o.eyes, speed: o.speed,
     }));
     renderList(dots);
     const labels = layoutLabels(dots, c.width, c.height, d, L);
     g.textBaseline = 'middle';
     for (const l of labels) {
+      const alpha = l.away ? 0.4 : 1;
+      g.save();
+      g.globalAlpha = alpha;
       g.fillStyle = 'rgba(14,17,22,.82)'; g.beginPath(); g.roundRect(l.x, l.y, l.w, l.h, 4 * d); g.fill();
       g.fillStyle = '#e8eaed'; g.font = `${12 * d}px system-ui`; g.fillText(l.label, l.x + 4 * d, l.y + l.h / 2);
+      if (l.away) {
+        g.font = `${11 * d}px system-ui`;
+        g.fillStyle = 'var(--muted)'; // canvas ignores CSS vars; use the muted hex
+        g.fillStyle = '#a7afbb';
+        g.fillText('away', l.x + 4 * d, l.y + l.h + 10 * d);
+      }
+      g.restore();
       l.backed = true;
     }
-    labelRects = labels.map((l) => ({ label: l.label, x: l.x, y: l.y, w: l.w, h: l.h, backed: !!l.backed }));
+    labelRects = labels.map((l) => ({ label: l.label, x: l.x, y: l.y, w: l.w, h: l.h, backed: !!l.backed, away: !!l.away }));
     canvasSize = [c.width, c.height];
     document.getElementById('count').textContent = `${net.peers.size + 1 + bots.count} here`;
     if (lastDraw) { frameMs.push(tNow - lastDraw); if (frameMs.length > 600) frameMs.shift(); }
