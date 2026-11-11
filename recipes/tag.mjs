@@ -1,5 +1,5 @@
 // Tag: the host keeps who is It in shared state; a tag action passes It with 1 s of immunity.
-// The full game (movement, glow, time as It) lives in example/tag.mjs; this file is the pasteable core.
+// The full game (movement, glow, time as It, 60 s rounds / scoreboard) lives in example/tag.mjs; this file is the pasteable core.
 import { lobby } from '@hawkesgen/net';
 
 const TAG_RADIUS = 0.036; // ~1.5 dots on the 0..1 play area

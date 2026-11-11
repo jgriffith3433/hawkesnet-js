@@ -162,8 +162,8 @@ test('tag: the player with the least time as It is the round winner', async () =
   const now = () => clockMs;
   const a = lobby({ name: 'Ada' });
   const b = lobby({ name: 'Bob' });
-  const tagA = createTag(a, { now });
-  const tagB = createTag(b, { now });
+  const tagA = createTag(a, { now, roundMs: 1000, resultsMs: 300 });
+  const tagB = createTag(b, { now, roundMs: 1000, resultsMs: 300 });
 
   a.join('tag-room-winner');
   b.join('tag-room-winner');
@@ -172,6 +172,9 @@ test('tag: the player with the least time as It is the round winner', async () =
   a.pose([0.2, 0.5, 0]);
   b.pose([0.8, 0.5, 0]);
   await flush();
+  assert.equal(tagA.phase, 'play');
+  assert.ok(tagA.round >= 1, 'host started a round');
+  assert.ok(tagA.remainingMs() > 0, 'timer counts down');
 
   // Ada is It for 900 ms, then tags Bob; Bob is It for 100 ms. Least time as It = Bob.
   clockMs += 900;
@@ -188,6 +191,49 @@ test('tag: the player with the least time as It is the round winner', async () =
   assert.equal(tagB.timeMs(a.id), 900);
   assert.equal(tagB.timeMs(b.id), 100);
 
+  // Host ends the round when the timer hits 0; both tabs see the same winner and scoreboard.
+  clockMs = tagA.roundEndsAt;
+  tagA.tick();
+  await flush();
+  assert.equal(tagA.phase, 'results');
+  assert.equal(tagB.phase, 'results');
+  assert.equal(tagA.winner, b.id);
+  assert.equal(tagB.winner, b.id);
+  assert.equal(tagA.scoreboard[0]?.id, b.id);
+  assert.ok(tagA.scoreboard[0].ms <= tagA.scoreboard[1].ms);
+
+  const endedRound = tagA.round;
+  clockMs = tagA.resultsUntil;
+  tagA.tick();
+  await flush();
+  assert.equal(tagA.phase, 'play');
+  assert.equal(tagB.phase, 'play');
+  assert.ok(tagA.round > endedRound, 'a new round starts after the scoreboard');
+  assert.equal(tagA.winner, null);
+  assert.equal(tagA.timeMs(a.id), 0);
+  assert.equal(tagA.timeMs(b.id), 0);
+
+  a.leave();
+  b.leave();
+});
+
+test('tag: beginRound(?round=) starts a fresh short round on the host', async () => {
+  let clockMs = 90_000;
+  const now = () => clockMs;
+  const a = lobby({ name: 'Ada' });
+  const b = lobby({ name: 'Bob' });
+  const tagA = createTag(a, { now, roundMs: 60_000, resultsMs: 200 });
+  const tagB = createTag(b, { now, roundMs: 60_000, resultsMs: 200 });
+  a.join('tag-room-short');
+  b.join('tag-room-short');
+  await flush();
+  assert.ok(tagA.beginRound(8_000));
+  await flush();
+  assert.equal(tagA.phase, 'play');
+  assert.equal(tagB.phase, 'play');
+  assert.ok(tagA.remainingMs() <= 8_000);
+  assert.ok(tagB.remainingMs() <= 8_000);
+  assert.equal(tagA.ROUND_MS, 8_000);
   a.leave();
   b.leave();
 });
