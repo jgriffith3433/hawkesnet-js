@@ -116,6 +116,7 @@ net.join('quickstart');</pre>
       { id: 'phone', title: 'The demo and the recipes page work at phone size (390 x 844) with touch', seconds: 70, tags: ['full', 'phone'] },
       { id: 'recipes', title: 'Each recipe has a live link and plays between two players', seconds: 210, tags: ['full', 'docs'] },
       { id: 'start', title: 'Getting started shows five numbered steps with expected output, Copy buttons, and 390 px layout', seconds: 60, tags: ['full', 'docs'] },
+      { id: 'reconnect', title: 'A drop shows Reconnecting, Back in the room for 2 s, ghosts the dropped player for 15 s, keeps name and colour', seconds: 70, tags: ['full'] },
       { id: 'demo-boot', title: 'Playtest hook, deep-path redirect, and SDK error card', seconds: 25, tags: ['smoke'] },
     ];
     window.hawkesPlaytest = {
@@ -951,11 +952,70 @@ net.join('quickstart');</pre>
       hash: async (t) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, '0')).join('') }),
       startScenario({ lobby, opts }),
       {
+        id: 'reconnect', title: 'A drop shows Reconnecting, Back in the room for 2 s, ghosts the dropped player for 15 s, keeps name and colour', seconds: 70, tags: ['full'],
+        description: 'Opens a second player in js-demo. Drops this tab with hawkesPlaytest.dropFor: the banner says Reconnecting within 1 s and the own dot stays frozen; on return Back in the room holds about 2 s then clears. Then drops the other player for longer than the 15 s grace: it is drawn at 40% with away, and removed only after 15 s. Name and colour match sessionStorage after the rejoin.',
+        run: async ({ check, until, wait, metric, event }) => {
+          const banner = () => ({ state: bannerEl.dataset.state, text: bannerEl.textContent });
+          const view = () => hawkesDemoView();
+          await until(() => net.room && banner().state === 'online', 15000, 'this tab to be connected');
+          const peer = lobby({ ...opts, name: 'Playtest bot', log: false }); peer.join('js-demo');
+          try {
+            await until(() => net.room.peers.has(peer.id), 15000, 'the second player to arrive');
+            await check('Within 1 s of the drop the tab says Reconnecting and its own dot stays frozen', async () => {
+              const was = { x: me.x, y: me.y };
+              const t0 = performance.now();
+              window.hawkesPlaytest.dropFor(4000);
+              await until(() => banner().state === 'reconnecting', 1000, () => `Reconnecting within 1 s (it says "${banner().text}")`);
+              metric('reconnectingMs', Math.round(performance.now() - t0));
+              areaPointer(Math.min(0.95, me.x + 0.2), Math.min(0.95, me.y + 0.2)); await wait(300);
+              if (Math.hypot(me.x - was.x, me.y - was.y) > 0.001) throw new Error('own dot moved while down');
+              if (!view().dots.find((d) => d.key === 'me')?.frozen) throw new Error('own dot is not marked frozen while down');
+              event('banner:reconnecting', banner().text);
+              return `${banner().text} after ${Math.round(performance.now() - t0)} ms, dot frozen`;
+            });
+            await check('When the network returns, Back in the room shows for 2 s and then clears', async () => {
+              await until(() => banner().state === 'back', 20000, () => `Back in the room (it says "${banner().text}")`);
+              const t0 = performance.now();
+              event('banner:back', banner().text);
+              await until(() => banner().state === 'online', 4000, 'the banner to clear to Connected');
+              const ms = Math.round(performance.now() - t0);
+              metric('backInTheRoomMs', ms);
+              if (ms < 1700 || ms > 2600) throw new Error(`Back in the room lasted ${ms} ms, expected about 2000`);
+              return `${ms} ms`;
+            });
+            await check('The returning player keeps the same name and colour from sessionStorage', async () => {
+              await until(() => net.room?.peers.has(peer.id), 15000, 'back in the room with the other player');
+              const saved = loadSelf(), id = view().identity;
+              if (saved.name !== id.name || saved.color !== id.color) throw new Error(`sessionStorage has ${saved.name}/${saved.color}, the page shows ${id.name}/${id.color}`);
+              if (id.name !== name || id.color !== myColor) throw new Error(`identity changed: ${name}/${myColor} → ${id.name}/${id.color}`);
+              event('identity:kept', `${id.name}:${id.color}`);
+              return `${id.name} ${id.color}`;
+            });
+            await check('The other player stays drawn at 40% with away, and is removed only after 15 s', async () => {
+              const gone = (id) => !net.room.peers.has(id);
+              const ghost = () => (view().dots || []).find((x) => x.id === peer.id);
+              const id = peer.id, t0 = performance.now();
+              window.hawkesPlaytest.dropFor(30000, peer);
+              await until(() => ghost()?.away && ghost().alpha <= 0.4, 4000, 'the dropped player ghosted at 40% with away');
+              event('peer:ghosted', `${id}:alpha=${ghost().alpha}`);
+              await wait(11000);
+              if (!ghost()?.away) throw new Error(`the ghost vanished after ${Math.round(performance.now() - t0)} ms, before the 15 s grace`);
+              await until(() => gone(id), 12000, 'the dropped player to be removed');
+              const ms = Math.round(performance.now() - t0);
+              metric('ghostRemovedMs', ms);
+              if (ms < 13500) throw new Error(`removed after ${ms} ms, before the 15 s grace`);
+              event('peer:removed', `${id} after ${ms} ms`);
+              return `ghosted, removed after ${ms} ms`;
+            });
+          } finally { try { await peer.leave(); } catch { /* gone */ } }
+        },
+      },
+      {
         id: 'demo-boot', title: 'Playtest hook, deep-path redirect, and SDK error card', seconds: 25, tags: ['smoke'],
         description: 'Checks the playtest hook is present within 1 s, opening a deeper path under the site lands on the working demo with the same query string, and a path that cannot find the SDK shows a plain error card.',
         run: async ({ check, until, wait, metric, progress, event }) => {
           await check('The playtest hook lists smoke, two-players, phone, recipes and demo-boot within 1 s', async () => {
-            const need = ['smoke', 'two-players', 'phone', 'recipes', 'demo-boot'];
+            const need = ["smoke", "two-players", "phone", "recipes", "reconnect", "demo-boot"];
             const t0 = performance.now();
             // Stub (or the real install) must already list every id — Studio reads scenarios() as soon as the object exists.
             const ids = () => (window.hawkesPlaytest?.scenarios?.() || []).map((s) => s.id);
