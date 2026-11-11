@@ -75,8 +75,9 @@ room.sync.action('tag:touch', (data, { authoritative }) => {
 ```
 
 **3. Host for rounds.** Only the host picks the first It, accepts tags, and re-picks when It leaves. Time spent as It is
-banked per player id (`timeAsIt`); the player with the least time wins a round when you add a timer (the sample tracks
-the times; the demo draws the glow and the `It` label).
+banked per player id (`timeAsIt`). The demo runs **60-second rounds** owned by the host in shared state: a timer at the
+top of the play area (pulses in the last 10 s); at 0 the least time-as-It wins (confetti, scoreboard for 3 s, then a new
+round with a random It). Use `?round=8` for an 8-second round when playtesting.
 
 Movement is ordinary `pose` / `onPose`. Open the demo twice to play; `npm test` runs the tag rules against
 `test/fake-net.mjs`.

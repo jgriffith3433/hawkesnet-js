@@ -35,7 +35,7 @@ export function installNetPlaytest(o) {
   const scenarios = [
     { id: 'smoke', title: 'Two players in one page meet in a room, move, message and leave', seconds: 90, tags: ['smoke'],
       description: 'Connects to the page\'s Hawkes Net, optional alone checks (beforeBot), opens a second player in the same room, checks poses both ways (this page\'s player moved by real input), messages both ways, and the second player leaving.' },
-    { id: 'two-players', title: 'Real browsers on one ?room= find each other, move and message', seconds: 75, tags: ['full', 'multiplayer'],
+    { id: 'two-players', title: 'Real browsers on one ?room= find each other, move, message, and finish a short Tag round', seconds: 100, tags: ['full', 'multiplayer'],
       description: 'Run with Studio peers 2-4: each browser waits for another player in its ?room=, moves by real input, checks it sees the other move and that messages go both ways.' },
   ];
   for (const sc of o.scenarios ?? []) scenarios.push({ tags: ['full'], seconds: 60, ...sc });
@@ -246,7 +246,7 @@ export function installNetPlaytest(o) {
       return `round trip ${ms} ms`;
     });
     // A page with more to check between two players (its own game) adds it here.
-    if (o.afterTwoPlayers) await o.afterTwoPlayers({ check, main, other, until, wait, metric, roundTrips, openBot: o.openBot, event, step });
+    if (o.afterTwoPlayers) await o.afterTwoPlayers({ check, main, other, until, wait, metric, roundTrips, openBot: o.openBot, event, step, options: run?.options || {} });
     progress(1);
     // Stay a little so the other browser can finish its own checks against this one.
     await wait(8000);
@@ -292,7 +292,16 @@ export function installNetPlaytest(o) {
 
   const q = new URLSearchParams(location.search);
   const auto = q.get('playtest');
-  if (auto) { const go = () => ((o.ready ? o.ready() : o.main()) ? api.start(auto, { seed: Number(q.get('seed')) || 1 }) : setTimeout(go, 250)); go(); }
+  if (auto) {
+    const go = () => {
+      if (!(o.ready ? o.ready() : o.main())) return void setTimeout(go, 250);
+      const opts = { seed: Number(q.get('seed')) || 1 };
+      if (q.get('round')) opts.round = Number(q.get('round'));
+      if (q.get('at')) opts.at = q.get('at');
+      api.start(auto, opts);
+    };
+    go();
+  }
   return api;
 }
 

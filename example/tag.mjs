@@ -1,15 +1,20 @@
 // Tag on @hawkesgen/net: built only on the public SDK (sync.state, sync.action, and pose/onPose for movement).
 // The room's host picks who is It and keeps it in shared state; when It's dot touches another dot (radius ~1.5 dots),
 // the tagged player becomes It with 1 s of tag-back immunity, and time spent as It is tracked per player id.
+// Host-owned rounds: a timer in shared state; at 0 the least time-as-It wins, a short results beat, then a new round.
 
 export const DOT_RADIUS = 0.024;
 export const TAG_RADIUS = DOT_RADIUS * 1.5; // 0.036 (~1.5 dots across the 0..1 play area)
 export const IMMUNE_MS = 1000;
+export const ROUND_MS = 60_000;
+export const RESULTS_MS = 3_000;
 
 export function createTag(net, options = {}) {
   if (!net) throw new Error('tag: createTag(net) needs a Hawkes Net lobby or room');
   const radius = Number.isFinite(options.radius) ? options.radius : TAG_RADIUS;
   const immuneMs = Number.isFinite(options.immuneMs) ? options.immuneMs : IMMUNE_MS;
+  let roundMs = Number.isFinite(options.roundMs) && options.roundMs > 0 ? Math.round(options.roundMs) : ROUND_MS;
+  const resultsMs = Number.isFinite(options.resultsMs) && options.resultsMs > 0 ? Math.round(options.resultsMs) : RESULTS_MS;
   const onChange = typeof options.onChange === 'function' ? options.onChange : null;
 
   let currentRoom = null;
@@ -27,6 +32,13 @@ export function createTag(net, options = {}) {
     immuneFrom: null,
     timeAsIt: {},
     seq: 0,
+    round: 0,
+    roundMs,
+    roundEndsAt: 0,
+    phase: 'play', // 'play' | 'results'
+    winner: null,
+    resultsUntil: 0,
+    scoreboard: [], // [{ id, ms }] frozen at round end, least time first
   };
   const positions = new Map(); // player id -> { x, y }
   const extras = new Map();    // local/simulated players (e.g. host bots) id -> { x, y }
@@ -63,6 +75,7 @@ export function createTag(net, options = {}) {
   function timeMs(id = myId(), at = clock()) {
     if (!id) return 0;
     const base = Number(game.timeAsIt[id]) || 0;
+    if (game.phase === 'results') return base;
     const live = game.it === id && game.since > 0 ? Math.max(0, at - game.since) : 0;
     return base + live;
   }
@@ -74,6 +87,37 @@ export function createTag(net, options = {}) {
     return out;
   }
 
+  function remainingMs(at = clock()) {
+    if (game.phase === 'results') return 0;
+    if (!game.roundEndsAt) return game.roundMs;
+    return Math.max(0, Math.round(game.roundEndsAt - at));
+  }
+
+  function pickWinner(at = clock()) {
+    const times = allTimes(at);
+    const ids = presentIds().filter((id) => id in times || true);
+    if (!ids.length) return null;
+    ids.sort((a, b) => {
+      const d = (times[a] || 0) - (times[b] || 0);
+      return d !== 0 ? d : a.localeCompare(b);
+    });
+    return ids[0];
+  }
+
+  function scoreboardOf(at = clock()) {
+    const times = allTimes(at);
+    return presentIds()
+      .map((id) => ({ id, ms: Math.round(times[id] || 0) }))
+      .sort((a, b) => (a.ms - b.ms) || a.id.localeCompare(b.id));
+  }
+
+  function pickRandomIt(avoid = null) {
+    const ids = presentIds();
+    if (!ids.length) return myId();
+    const pool = avoid && ids.length > 1 ? ids.filter((id) => id !== avoid) : ids;
+    return pool[Math.floor(Math.random() * pool.length)] || ids[0];
+  }
+
   function getStatePayload() {
     return {
       it: game.it,
@@ -82,6 +126,13 @@ export function createTag(net, options = {}) {
       immuneFrom: game.immuneFrom,
       timeAsIt: { ...game.timeAsIt },
       seq: game.seq,
+      round: game.round,
+      roundMs: game.roundMs,
+      roundEndsAt: game.roundEndsAt,
+      phase: game.phase,
+      winner: game.winner,
+      resultsUntil: game.resultsUntil,
+      scoreboard: game.scoreboard.map((r) => ({ id: r.id, ms: r.ms })),
     };
   }
 
@@ -101,6 +152,14 @@ export function createTag(net, options = {}) {
       immune: Boolean(game.it && at < game.immuneUntil),
       timeAsIt: allTimes(at),
       seq: game.seq,
+      round: game.round,
+      roundMs: game.roundMs,
+      roundEndsAt: game.roundEndsAt,
+      phase: game.phase,
+      winner: game.winner,
+      resultsUntil: game.resultsUntil,
+      scoreboard: game.scoreboard.map((r) => ({ id: r.id, ms: r.ms })),
+      remainingMs: remainingMs(at),
     };
   }
 
@@ -108,7 +167,10 @@ export function createTag(net, options = {}) {
     if (!s || typeof s !== 'object') return false;
     const seq = Number(s.seq) || 0;
     if (seq < game.seq) return false;
-    if (seq === game.seq && game.it !== null && s.it === game.it) return false;
+    if (seq === game.seq && game.it !== null && s.it === game.it
+      && (s.phase || 'play') === game.phase
+      && Number(s.roundEndsAt) === game.roundEndsAt
+      && (s.winner || null) === game.winner) return false;
     game.seq = seq;
     game.it = typeof s.it === 'string' && s.it ? s.it : null;
     game.since = Number.isFinite(s.since) ? s.since : clock();
@@ -118,6 +180,17 @@ export function createTag(net, options = {}) {
       const next = {};
       for (const [k, v] of Object.entries(s.timeAsIt)) if (Number.isFinite(v)) next[k] = Math.round(v);
       game.timeAsIt = next;
+    }
+    if (Number.isFinite(s.round)) game.round = Math.max(0, Math.round(s.round));
+    if (Number.isFinite(s.roundMs) && s.roundMs > 0) game.roundMs = Math.round(s.roundMs);
+    if (Number.isFinite(s.roundEndsAt)) game.roundEndsAt = s.roundEndsAt;
+    if (s.phase === 'results' || s.phase === 'play') game.phase = s.phase;
+    game.winner = typeof s.winner === 'string' && s.winner ? s.winner : null;
+    if (Number.isFinite(s.resultsUntil)) game.resultsUntil = s.resultsUntil;
+    if (Array.isArray(s.scoreboard)) {
+      game.scoreboard = s.scoreboard
+        .filter((r) => r && typeof r.id === 'string')
+        .map((r) => ({ id: r.id, ms: Math.round(Number(r.ms) || 0) }));
     }
     sentTouchKey = '';
     sendAck();
@@ -137,17 +210,74 @@ export function createTag(net, options = {}) {
     if (commitAction) commitAction(next);
   }
 
+  function endRound(at = clock()) {
+    if (!isHost() || game.phase === 'results') return false;
+    bankTime(at);
+    const board = scoreboardOf(at);
+    const winner = board[0]?.id || pickWinner(at);
+    const frozen = {};
+    for (const row of board) frozen[row.id] = row.ms;
+    broadcastState({
+      it: game.it,
+      since: at,
+      immuneUntil: game.immuneUntil,
+      immuneFrom: game.immuneFrom,
+      timeAsIt: frozen,
+      seq: game.seq + 1,
+      round: game.round,
+      roundMs: game.roundMs,
+      roundEndsAt: game.roundEndsAt,
+      phase: 'results',
+      winner,
+      resultsUntil: at + resultsMs,
+      scoreboard: board,
+    });
+    return true;
+  }
+
+  function startRound(at = clock(), opts = {}) {
+    if (!isHost()) return false;
+    const ms = Number.isFinite(opts.roundMs) && opts.roundMs > 0 ? Math.round(opts.roundMs) : game.roundMs;
+    game.roundMs = ms;
+    roundMs = ms;
+    const pick = opts.it || pickRandomIt(opts.avoid || null);
+    if (!pick) return false;
+    const nextRound = (game.round || 0) + 1;
+    broadcastState({
+      it: pick,
+      since: at,
+      immuneUntil: 0,
+      immuneFrom: null,
+      timeAsIt: Object.fromEntries(presentIds().map((id) => [id, 0])),
+      seq: game.seq + 1,
+      round: nextRound,
+      roundMs: ms,
+      roundEndsAt: at + ms,
+      phase: 'play',
+      winner: null,
+      resultsUntil: 0,
+      scoreboard: [],
+    });
+    return true;
+  }
+
   function ensureIt() {
     if (!isHost()) return;
     const me = myId();
     if (!me) return;
-    if (game.it && isPresent(game.it)) return;
     const at = clock();
+    if (game.phase === 'results') return;
+    if (!game.round) {
+      startRound(at);
+      return;
+    }
+    if (game.it && isPresent(game.it)) return;
     bankTime(at);
     const candidates = presentIds();
     const pick = candidates[0] || me;
     game.timeAsIt[pick] = game.timeAsIt[pick] || 0;
     broadcastState({
+      ...getStatePayload(),
       it: pick,
       since: at,
       immuneUntil: 0,
@@ -157,8 +287,25 @@ export function createTag(net, options = {}) {
     });
   }
 
+  function tickRound() {
+    if (!isHost() || !currentRoom) return;
+    const at = clock();
+    if (!game.round) {
+      ensureIt();
+      return;
+    }
+    if (game.phase === 'play' && game.roundEndsAt > 0 && at >= game.roundEndsAt) {
+      endRound(at);
+      return;
+    }
+    if (game.phase === 'results' && game.resultsUntil > 0 && at >= game.resultsUntil) {
+      startRound(at);
+    }
+  }
+
   function tryTag(fromId, toId) {
     if (!isHost()) return false;
+    if (game.phase === 'results') return false;
     if (!game.it || fromId !== game.it) return false;
     if (!toId || toId === game.it || !isPresent(toId)) return false;
     const at = clock();
@@ -175,6 +322,13 @@ export function createTag(net, options = {}) {
       immuneFrom: fromId,
       timeAsIt: { ...game.timeAsIt },
       seq: game.seq + 1,
+      round: game.round,
+      roundMs: game.roundMs,
+      roundEndsAt: game.roundEndsAt,
+      phase: game.phase,
+      winner: null,
+      resultsUntil: 0,
+      scoreboard: [],
     });
     return true;
   }
@@ -183,6 +337,8 @@ export function createTag(net, options = {}) {
     const me = myId();
     if (!currentRoom || !me) return;
     if (localPos.known) positions.set(me, { x: localPos.x, y: localPos.y });
+    tickRound();
+    if (game.phase === 'results') return;
     if (!game.it) {
       if (isHost()) ensureIt();
       return;
@@ -231,6 +387,13 @@ export function createTag(net, options = {}) {
       immuneFrom: fromId,
       timeAsIt: { ...game.timeAsIt },
       seq: preSeq + 1,
+      round: game.round,
+      roundMs: game.roundMs,
+      roundEndsAt: game.roundEndsAt,
+      phase: game.phase,
+      winner: null,
+      resultsUntil: 0,
+      scoreboard: [],
     });
     // applyState clears sentTouchKey; re-arm so we don't spam touch while the host commits.
     sentTouchKey = key;
@@ -267,6 +430,13 @@ export function createTag(net, options = {}) {
     game.immuneFrom = null;
     game.timeAsIt = {};
     game.seq = 0;
+    game.round = 0;
+    game.roundMs = roundMs;
+    game.roundEndsAt = 0;
+    game.phase = 'play';
+    game.winner = null;
+    game.resultsUntil = 0;
+    game.scoreboard = [];
     positions.clear();
     extras.clear();
     peerAck.clear();
@@ -375,14 +545,23 @@ export function createTag(net, options = {}) {
     DOT_RADIUS,
     RADIUS: radius,
     IMMUNE_MS: immuneMs,
+    get ROUND_MS() { return game.roundMs; },
+    RESULTS_MS: resultsMs,
     get it() { return game.it; },
     get since() { return game.since; },
     get immuneUntil() { return game.immuneUntil; },
     get immuneFrom() { return game.immuneFrom; },
     get seq() { return game.seq; },
+    get round() { return game.round; },
+    get phase() { return game.phase; },
+    get winner() { return game.winner; },
+    get roundEndsAt() { return game.roundEndsAt; },
+    get resultsUntil() { return game.resultsUntil; },
+    get scoreboard() { return game.scoreboard.map((r) => ({ id: r.id, ms: r.ms })); },
     isIt: (id = myId()) => Boolean(id && game.it === id),
     isImmune: (at = clock()) => Boolean(game.it && at < game.immuneUntil),
     timeMs: (id = myId(), at = clock()) => timeMs(id, at),
+    remainingMs: (at = clock()) => remainingMs(at),
     labelFor: (id, baseName = '') => (id && game.it === id ? 'It' : baseName),
     peerIt: (id) => peerAck.get(id)?.it ?? null,
     agreedWith: (id) => Boolean(game.it && peerAck.get(id)?.it === game.it && peerAck.get(id)?.seq === game.seq),
@@ -406,6 +585,19 @@ export function createTag(net, options = {}) {
       if ((game.seq !== prevSeq || sentTouchKey !== prevTouch) && typeof net.pose === 'function') {
         net.pose([x, y, 0]);
       }
+    },
+    // Host (or any peer calling into the host path) advances round phase off the page's pose/tick loop — no timers in this module.
+    tick() { tickRound(); },
+    // Named setup: start a fresh round of `ms` (e.g. ?round=8 → 8000). Host only.
+    beginRound(ms) {
+      if (!isHost()) return false;
+      const at = clock();
+      return startRound(at, { roundMs: Number.isFinite(ms) && ms > 0 ? ms : game.roundMs });
+    },
+    setRoundMs(ms) {
+      if (!(Number.isFinite(ms) && ms > 0)) return;
+      roundMs = Math.round(ms);
+      game.roundMs = roundMs;
     },
     snapshot: (at = clock()) => snapshot(at),
     // Host-local extras (filler bots): same Tag rules, not real peers. Positions feed touch checks.
