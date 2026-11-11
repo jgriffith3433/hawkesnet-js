@@ -35,8 +35,8 @@ export function installNetPlaytest(o) {
   const scenarios = [
     { id: 'smoke', title: 'Two players in one page meet in a room, move, message and leave', seconds: 90, tags: ['smoke'],
       description: 'Connects to the page\'s Hawkes Net, optional alone checks (beforeBot), opens a second player in the same room, checks poses both ways (this page\'s player moved by real input), messages both ways, and the second player leaving.' },
-    { id: 'two-players', title: 'Real browsers on one ?room= find each other, move, message, and finish a short Tag round', seconds: 100, tags: ['full', 'multiplayer'],
-      description: 'Run with Studio peers 2-4: each browser waits for another player in its ?room=, moves by real input, checks it sees the other move and that messages go both ways.' },
+    { id: 'two-players', title: 'Real browsers on one ?room= find each other, move, message, Tag, then a 5 s drop logs recovery_ms under 2 s', seconds: 130, tags: ['full', 'multiplayer'],
+      description: 'Run with Studio peers 2-4: each browser waits for another player in its ?room=, moves by real input, checks it sees the other move and that messages go both ways. afterTwoPlayers then runs a 5 s drop leg (one peer offline via dropFor): recovery_ms must be under 2000, name/colour/spot match, and the other tab shows the player as away.' },
   ];
   for (const sc of o.scenarios ?? []) scenarios.push({ tags: ['full'], seconds: 60, ...sc });
   const STALL = 60;

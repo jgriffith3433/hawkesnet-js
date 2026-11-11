@@ -36,3 +36,5 @@ Ambient: grid floor, soft light, player trails; reconnect and away are shown thr
 ## Drop and hold: how it is played (playtest)
 
 The `reconnect` scenario plays the drop on the page: a second player keeps posing (a player is drawn once it has sent a pose), this tab is dropped with `hawkesPlaytest.dropFor(ms)`, and the Reconnecting… banner is held on screen for desktop and for a 390 px frame before Back in the room (2 s), then the other player is dropped and shown ghosted at 40% with “away” until the 15 s grace removes them.
+
+The daily `two-players` peers run adds a **drop leg** after Tag: the lower peer id goes offline for 5 s via `dropFor` (the page stand-in for a CDP network drop), logs `recovery_ms` (must be under 2000), keeps the same name, colour and spot, and the other tab must draw that player ghosted as “away” rather than removing them. On a 390×844 phone peer, that leg moves by touch.

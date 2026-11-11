@@ -84,6 +84,32 @@ round with a random It). Use `?round=8` for an 8-second round when playtesting.
 Movement is ordinary `pose` / `onPose`. Open the demo twice to play; `npm test` runs the tag rules against
 `test/fake-net.mjs`.
 
+## Handling drops
+
+When the socket drops, the SDK sets `status` to `reconnecting`, then back to `online`. Listen for `status`, `ready`
+(`resumed: true` means the same seat came back on a resume token) and `peer:away` (the other tab should ghost that
+player, not remove them). Resume keeps your peer id, ownership and reliable sequence through the node's 15 s grace. A
+**fresh ticket** is what you get after a node restart past that grace (or when resume is gone): same `sub` if you pass
+one, but a new place in the room if the old seat was cleared — wire `ready` and restore your avatar from your own
+memory (the demo keeps name and colour in `sessionStorage`).
+
+```js
+import { join } from '@hawkesgen/net';
+
+const net = await join('drops-demo', { project: 'netdemo', name: 'Ada' });
+net.when('status', ({ status }) => {
+  console.log(status); // online | reconnecting (then online again)
+});
+net.when('ready', ({ resumed }) => {
+  // resumed: same seat after a drop; false after a fresh ticket (node restart past grace)
+  console.log(resumed ? 'resumed' : 'fresh ticket');
+});
+net.when('peer:away', ({ peer, away }) => {
+  // Ghost at ~40%; remove only after the server's 15 s grace, not on the first drop.
+  console.log(peer.name, away ? 'away' : 'back');
+});
+```
+
 ## More
 
 - **Projects and tickets:** make an account and a project at [net.hawkesgen.ai](https://net.hawkesgen.ai). A page on one

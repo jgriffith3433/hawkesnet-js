@@ -112,7 +112,7 @@ net.join('quickstart');</pre>
     // Keep in sync with installNetPlaytest (smoke, two-players) + phone / recipes / demo-boot on this page.
     var stubScenarios = [
       { id: 'smoke', title: 'Two players in one page meet in a room, move, message and leave', seconds: 90, tags: ['smoke'] },
-      { id: 'two-players', title: 'Real browsers on one ?room= find each other, move, message, and finish a short Tag round', seconds: 100, tags: ['full', 'multiplayer'] },
+      { id: 'two-players', title: 'Real browsers on one ?room= find each other, move, message, Tag, then a 5 s drop logs recovery_ms under 2 s', seconds: 130, tags: ['full', 'multiplayer'] },
       { id: 'phone', title: 'The demo and the recipes page work at phone size (390 x 844) with touch', seconds: 70, tags: ['full', 'phone'] },
       { id: 'recipes', title: 'Each recipe has a live link and plays between two players', seconds: 210, tags: ['full', 'docs'] },
       { id: 'start', title: 'Getting started shows five numbered steps with expected output, Copy buttons, and 390 px layout', seconds: 60, tags: ['full', 'docs'] },
@@ -766,13 +766,24 @@ net.join('quickstart');</pre>
       return `${targetId} stayed It through ${tag.IMMUNE_MS} ms immunity; time as It: ${prevTime} ms / ${newTime} ms`;
     });
   };
-  // Test hook: close the socket and refuse reconnects for `ms` (the SDK's own backoff then brings it back).
+  // Test hook: close the socket and refuse reconnects for `ms` (page stand-in for a CDP network offline).
+  // Do not call _lost while blocked — that would grow the SDK backoff past the 2 s recovery budget.
   const dropFor = (room, ms) => {
     if (!room) throw new Error('dropFor: no room');
     const target = room.room || room; // Lobby → Room, or Room itself
     const real = target._connect, until = performance.now() + ms;
+    let wake = null;
     target._connect = function (q) {
-      if (performance.now() < until) return this._lost(1006, 'blocked by dropFor');
+      if (performance.now() < until) {
+        if (wake) clearTimeout(wake);
+        wake = setTimeout(() => {
+          wake = null;
+          if (this.closed || this.ws) return;
+          target._connect = real;
+          return real.call(this, q);
+        }, Math.max(0, until - performance.now()) + 20);
+        return;
+      }
       target._connect = real;
       return real.call(this, q);
     };
@@ -940,6 +951,67 @@ net.join('quickstart');</pre>
           if (!(tagBurstTotal > before)) throw new Error('expected a ring burst on tag');
           return `ring burst #${tagBurstTotal} (audio ${audioUnlocked ? 'unlocked' : 'locked'})`;
         });
+        // Drop leg (daily peers): one browser offline for 5 s; the other must see it ghosted as away.
+        // Tag checks are done — clear the flag so phone touch-drag can run (drag() skips while it is set).
+        inTagPlaytest = false;
+        const ban = () => ({ state: bannerEl.dataset.state, text: bannerEl.textContent });
+        // Stable role: the lower peer id drops so both tabs don't drop at once.
+        const iAmDropper = String(net.id) < String(other);
+        if (iAmDropper) {
+          await check('A 5 s drop recovers under 2000 ms with the same name, colour and spot', async () => {
+            // Phone (390×844 / stacked): move by touch before the drop so this leg is touch-driven.
+            if (stacked()) await drag(step);
+            else { moveInput(me.x, me.y); await step(80); }
+            const before = { name, color: myColor, x: me.x, y: me.y };
+            event('shot:drop:before', `${before.name}@${before.x.toFixed(2)},${before.y.toFixed(2)}`);
+            const dropMs = 5000;
+            const restoreAt = performance.now() + dropMs;
+            window.hawkesPlaytest.dropFor(dropMs);
+            await until(() => net.status === 'reconnecting' || ban().state === 'reconnecting', 1500, () => `Reconnecting within 1.5 s (status ${net.status}, banner "${ban().text}")`);
+            event('shot:drop:reconnecting', ban().text);
+            await wait(900);
+            await until(() => performance.now() >= restoreAt && (net.status === 'online' || ban().state === 'online' || ban().state === 'back'), 20000, 'back online after the 5 s drop');
+            const recovery_ms = Math.round(performance.now() - restoreAt);
+            metric('recovery_ms', recovery_ms);
+            event('drop:recovery', `${recovery_ms}ms`);
+            if (recovery_ms >= 2000) throw new Error(`recovery_ms ${recovery_ms} >= 2000`);
+            await until(() => ban().state === 'online' || ban().state === 'back', 5000, 'banner settled after recovery');
+            const id = hawkesDemoView().identity;
+            const nameMatch = id.name === before.name ? 1 : 0;
+            const colorMatch = id.color === before.color ? 1 : 0;
+            const spotMatch = Math.hypot(me.x - before.x, me.y - before.y) <= 0.001 ? 1 : 0;
+            metric('nameMatch', nameMatch);
+            metric('colorMatch', colorMatch);
+            metric('spotMatch', spotMatch);
+            event('shot:drop:recovered', `recovery_ms=${recovery_ms};${id.name}/${id.color}@${me.x.toFixed(2)},${me.y.toFixed(2)}`);
+            if (!nameMatch) throw new Error(`name changed: was ${before.name}, now ${id.name}`);
+            if (!colorMatch) throw new Error(`colour changed: was ${before.color}, now ${id.color}`);
+            if (!spotMatch) throw new Error(`spot moved while down: was ${before.x.toFixed(3)},${before.y.toFixed(3)}, now ${me.x.toFixed(3)},${me.y.toFixed(3)}`);
+            // Touch again on phone so the recovered leg is visible as touch play.
+            if (stacked()) await drag(step);
+            return `recovery_ms=${recovery_ms}; name/colour/spot match`;
+          });
+        } else {
+          await check("The other tab's drop shows that player ghosted as away (not removed)", async () => {
+            await until(() => {
+              const d = (hawkesDemoView().dots || []).find((x) => x.id === other);
+              const p = net.peers.get(other);
+              return Boolean((d && d.away && d.alpha <= 0.4) || (p && p.away));
+            }, 90000, 'the dropped peer to show as away');
+            const d = (hawkesDemoView().dots || []).find((x) => x.id === other);
+            if (!net.peers.has(other)) throw new Error('the dropped peer was removed instead of marked away');
+            if (!d || !d.away || !(d.alpha <= 0.4)) throw new Error(`expected a 40% away ghost, got ${d ? `away=${d.away} alpha=${d.alpha}` : 'no dot'}`);
+            metric('peerAwaySeen', 1);
+            event('shot:drop:away', `${other}:alpha=${d.alpha}`);
+            await wait(1000);
+            await until(() => {
+              const x = (hawkesDemoView().dots || []).find((y) => y.id === other);
+              return x && !x.away && x.alpha === 1;
+            }, 30000, 'the dropped peer to return from away');
+            event('shot:drop:peer-back', other);
+            return `away at ${d.alpha}, then back`;
+          });
+        }
       } finally {
         inTagPlaytest = false;
       }
