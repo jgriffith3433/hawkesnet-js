@@ -5,8 +5,8 @@
 //   smoke        this page's player and a second player the bot opens in this same page meet in one room on the page's
 //                Hawkes Net, see each other move (this page's player moved by real input), trade messages both ways,
 //                and the second one leaves. One browser is enough, so every playtest is a real two-player check.
-//   two-players  two (or more) real browsers on one ?room= (Studio's peers playtest) find each other, move, and trade
-//                messages.
+//   two-players  two (or more) real browsers on one ?room=&peer= (Studio's peers playtest) find each other, move, and
+//                trade messages. Hard-fails without ?peer= or ?room= (shared demo room / one browser is runner fault).
 //
 // Each check shows on the page as it passes or fails (top right), so the video and screenshots say what happened, and the
 // report's problems say which check failed and why. Nothing runs until Studio calls start() or the address has
@@ -104,12 +104,22 @@ export function installNetPlaytest(o) {
   const fmt = (p) => (p ? `[${p.map((v) => Math.round(v * 100) / 100).join(', ')}]` : 'nothing');
   const tol = o.tolerance ?? 0.05;
   let lastProblem = '';
+  // Studio/Gen often covers one peer tab: SDK auto-away (2 s) then freezes that peer's drawn spot. Disable visibility
+  // away for the run (socket-drop away still comes from the server). Mutate room.o — setAway(false) alone is overwritten.
+  const keepPresent = (n) => {
+    const room = n?.room || n;
+    if (!room) return;
+    if (room.o) room.o.away = false;
+    if (room.away && typeof room.setAway === 'function') room.setAway(false);
+    if (n !== room && n.o) n.o.away = false;
+  };
   // Pings from anyone get a pong (the other browser in two-players, the bot in smoke). Installed once the page's net exists.
   const pongs = new Map(); // nonce -> resolve
   const pingsFrom = new Map(); // peer id -> count
   const wire = (n, who) => {
     if (!n || n.__hnpt) return;
     n.__hnpt = true;
+    keepPresent(n);
     n.on('hn-pt-ping', (d, from) => {
       if (from?.id) pingsFrom.set(`${who}:${from.id}`, (pingsFrom.get(`${who}:${from.id}`) ?? 0) + 1);
       n.send('hn-pt-pong', d, from?.id ? { to: from.id } : undefined);
@@ -136,8 +146,9 @@ export function installNetPlaytest(o) {
 
   async function smoke() {
     let main = o.main();
+    keepPresent(main);
     const okConnect = await check(`Connected to ${o.where ?? 'Hawkes Net'}`, async () => {
-      const ms = await until(() => { main = o.main(); if (main) wire(main, 'main'); return isOnline(main); }, 20000, () => `the room to say online (${main ? `status ${main.status ?? '?'}` : "the page's client wasn't made"}${main?.lastProblem || lastProblem ? `, last problem: ${main?.lastProblem || lastProblem}` : ''})`);
+      const ms = await until(() => { main = o.main(); if (main) wire(main, 'main'); keepPresent(main); return isOnline(main); }, 20000, () => `the room to say online (${main ? `status ${main.status ?? '?'}` : "the page's client wasn't made"}${main?.lastProblem || lastProblem ? `, last problem: ${main?.lastProblem || lastProblem}` : ''})`);
       metric('joinMs', Math.round(ms)); log(`main online as ${main.id} in ${main.roomName ?? main.room ?? ''}`);
       return `${Math.round(ms)} ms`;
     });
@@ -210,22 +221,47 @@ export function installNetPlaytest(o) {
 
   async function twoPlayers() {
     let main = o.main();
-    const room = new URLSearchParams(location.search).get('room');
-    if (!room) problem('warning', 'no ?room= on the address: playing in the shared demo room, where strangers may be');
+    const q = new URLSearchParams(location.search);
+    const room = q.get('room');
+    const peer = q.get('peer');
+    // Gen's peers>1 path puts ?room=<id>&peer=0..n-1 on every browser. Without ?peer=, Studio opened one page only.
+    // Without ?room=, every browser shares the public demo room (strangers / leftover Playtest bots) — fail fast.
+    const okPeerPage = await check('Studio opened a peer browser (?peer=)', async () => {
+      if (peer == null || peer === '') {
+        throw new Error('two-players needs Studio peers≥2 (each browser gets ?room=&peer=); this URL has no ?peer=, so the second page never started — runner fault, not a Net join bug');
+      }
+      return `peer ${peer}${room ? ` in room ${room}` : ''}`;
+    });
+    if (!okPeerPage) return finish('lost');
+    const okRoom = await check('Studio gave a unique ?room=', async () => {
+      if (!room) {
+        throw new Error('two-players needs ?room=<id> shared by every peer browser; without it this page is in the shared demo room where strangers and bots interfere');
+      }
+      return room;
+    });
+    if (!okRoom) return finish('lost');
+    keepPresent(main);
     const okConnect = await check(`Connected to ${o.where ?? 'Hawkes Net'}`, async () => {
-      const ms = await until(() => { main = o.main(); if (main) wire(main, 'main'); return isOnline(main); }, 20000, () => `the room to say online (${main ? `status ${main.status ?? '?'}` : "the page's client wasn't made"}${main?.lastProblem || lastProblem ? `, last problem: ${main?.lastProblem || lastProblem}` : ''})`);
+      const ms = await until(() => { main = o.main(); if (main) wire(main, 'main'); keepPresent(main); return isOnline(main); }, 20000, () => `the room to say online (${main ? `status ${main.status ?? '?'}` : "the page's client wasn't made"}${main?.lastProblem || lastProblem ? `, last problem: ${main?.lastProblem || lastProblem}` : ''})`);
       metric('joinMs', Math.round(ms));
-      return `${Math.round(ms)} ms${room ? ` in room ${room}` : ''}`;
+      return `${Math.round(ms)} ms in room ${room}`;
     });
     if (!okConnect) return finish('lost');
     progress(0.2);
-    const others = () => [...main.peers.keys()].filter((id) => id !== main.id);
+    // Prefer a present peer (not away / not a leftover "Playtest bot" from another smoke in a shared room).
+    const mateIds = () => {
+      keepPresent(main);
+      return [...main.peers.entries()]
+        .filter(([id, p]) => id !== main.id && !p?.away && !/playtest/i.test(p?.name || ''))
+        .map(([id]) => id);
+    };
     let other = null;
+    metric('players', 1);
     const okMeet = await check('Another player is in the room', async () => {
-      const ms = await until(() => others().length > 0, 60000, 'another browser to join');
-      other = others()[0];
-      metric('players', others().length + 1); metric('meetMs', Math.round(ms));
-      return `${others().length + 1} players`;
+      const ms = await until(() => mateIds().length > 0, 60000, () => `another browser to join (?peer=${peer} still alone; if Gen's players list has only one entry this is runner infra)`);
+      other = mateIds()[0];
+      metric('players', mateIds().length + 1); metric('meetMs', Math.round(ms));
+      return `${mateIds().length + 1} players`;
     });
     if (!okMeet) return finish('lost');
     progress(0.4);
@@ -234,12 +270,20 @@ export function installNetPlaytest(o) {
     const r = run;
     (async () => { try { while (r === run && !r.done) await o.drive(step); } catch { /* the run ended */ } })();
     await check("The other player's moves show here", async () => {
+      // If the mate went away mid-run (covered tab), re-pick a present one before watching motion.
+      if (!mateIds().includes(other)) other = mateIds()[0] || other;
       let first = o.shownPos(other)?.slice() ?? null;
-      await until(() => { const p = o.shownPos(other); if (p && !first) first = p.slice(); return p && first && !near(p, first, tol); }, 15000, 'the other player to move on this page');
+      await until(() => {
+        if (!mateIds().includes(other)) other = mateIds()[0] || other;
+        const p = o.shownPos(other);
+        if (p && !first) first = p.slice();
+        return p && first && !near(p, first, tol);
+      }, 15000, 'the other player to move on this page');
       return `now at ${fmt(o.shownPos(other))}`;
     });
     progress(0.7);
     await check('Messages go both ways', async () => {
+      if (!mateIds().includes(other)) other = mateIds()[0] || other;
       const ms = await roundTrips(main, 'main', other);
       await until(() => (pingsFrom.get(`main:${other}`) ?? 0) > 0, 20000, 'a message from the other player');
       metric('rttMs', ms);
