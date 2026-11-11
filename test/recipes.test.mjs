@@ -234,3 +234,25 @@ test('getting started (example/start.html): five numbered steps with Copy and ex
   await settle();
   assert.ok(out.includes('Bob left'), 'logs Bob left');
 });
+
+test('the README\'s "Handling drops" section: three reconnect events, resume vs fresh ticket, and a 15-line example the built SDK accepts', async () => {
+  const md = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  const sec = md.match(/## Handling drops\n([\s\S]*?)\n## /)?.[1];
+  assert.ok(sec, 'README has a Handling drops section');
+  for (const ev of ['status', 'ready', 'peer:away', 'peer:leave', 'reconnecting', 'resumed']) assert.ok(sec.includes(ev), `Handling drops names ${ev}`);
+  assert.match(sec, /resume/i); assert.match(sec, /fresh ticket/i); assert.match(sec, /node restart/i);
+  const block = sec.match(/```js\n([\s\S]*?)```/)?.[1];
+  assert.ok(block, 'Handling drops has a code example');
+  assert.equal(block.trimEnd().split('\n').length, 15, 'the example is 15 lines');
+  // The example, unedited, imports from the package and parses as a module against the built SDK (a join needs a live Net, so it is not called here).
+  const dir = fs.mkdtempSync(path.join(tmp, 'drops-'));
+  fs.mkdirSync(path.join(dir, 'node_modules', '@hawkesgen', 'net'), { recursive: true });
+  for (const f of ['hawkes-net.mjs', 'hawkes-net-core.mjs', 'package.json']) fs.copyFileSync(path.join(root, f), path.join(dir, 'node_modules', '@hawkesgen', 'net', f));
+  fs.writeFileSync(path.join(dir, 'example.mjs'), block);
+  const sdk = await import(pathToFileURL(path.join(dir, 'node_modules', '@hawkesgen', 'net', 'hawkes-net.mjs')).href);
+  assert.equal(typeof sdk.join, 'function');
+  const { execFileSync } = await import('node:child_process');
+  execFileSync(process.execPath, ['--check', path.join(dir, 'example.mjs')]);
+  const src = fs.readFileSync(path.join(root, 'hawkes-net.mjs'), 'utf8');
+  for (const ev of ["'peer:away'", "'peer:leave'", "'ready'", "'status'"]) assert.ok(src.includes(`emit(${ev}`), `the SDK emits ${ev}`);
+});

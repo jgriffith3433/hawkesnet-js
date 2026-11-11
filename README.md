@@ -86,29 +86,37 @@ Movement is ordinary `pose` / `onPose`. Open the demo twice to play; `npm test` 
 
 ## Handling drops
 
-When the socket drops, the SDK sets `status` to `reconnecting`, then back to `online`. Listen for `status`, `ready`
-(`resumed: true` means the same seat came back on a resume token) and `peer:away` (the other tab should ghost that
-player, not remove them). Resume keeps your peer id, ownership and reliable sequence through the node's 15 s grace. A
-**fresh ticket** is what you get after a node restart past that grace (or when resume is gone): same `sub` if you pass
-one, but a new place in the room if the old seat was cleared — wire `ready` and restore your avatar from your own
-memory (the demo keeps name and colour in `sessionStorage`).
+When the socket drops, the SDK sets `status` to `reconnecting`, retries with a backoff, and goes back to `online`. Three
+events tell your game: `status` (`{ status }`: `online`, `reconnecting`, ...), `ready` (fires again after every return;
+`resumed: true` means the same seat came back on its resume token) and `peer:away` (`{ peer, away }`: the room marks a
+dropped player `away` for a 15 s grace, so ghost them, don't remove them; `peer:leave` comes only when the grace ends).
+
+- **Resume:** a drop shorter than the grace comes back on the resume token: same peer id, same ownership, queued
+  reliable messages replayed (`resumed: true`), usually well under 2 s once the network is back.
+- **Fresh ticket:** after a node restart, a longer outage, or a refused token, the SDK asks for a new ticket
+  (`resumed: false`): you are a new seat in the room, so rebuild your avatar from your own memory (the demo keeps name and
+  colour in `sessionStorage`) and re-send your pose.
 
 ```js
 import { join } from '@hawkesgen/net';
 
 const net = await join('drops-demo', { project: 'netdemo', name: 'Ada' });
+const me = { x: 0.5, y: 0.5 }; // your own memory: it survives a drop, and rebuilds a fresh seat
 net.when('status', ({ status }) => {
   console.log(status); // online | reconnecting (then online again)
 });
 net.when('ready', ({ resumed }) => {
-  // resumed: same seat after a drop; false after a fresh ticket (node restart past grace)
-  console.log(resumed ? 'resumed' : 'fresh ticket');
+  console.log(resumed ? 'resumed: same seat' : 'fresh ticket: new seat');
+  net.pose([me.x, me.y, 0], 0); // either way, say where you are again
 });
 net.when('peer:away', ({ peer, away }) => {
-  // Ghost at ~40%; remove only after the server's 15 s grace, not on the first drop.
-  console.log(peer.name, away ? 'away' : 'back');
+  console.log(peer.name, away ? 'away: draw at 40%' : 'back: draw in full'); // not removed
 });
+net.when('peer:leave', ({ peer }) => console.log(peer.name, 'left for good (grace over)'));
 ```
+
+The demo's daily two-players playtest runs this: one player goes offline for 5 s, and it logs `recovery_ms` (must be under
+2000), whether name, colour and spot match, and that the other tab drew the player as `away`.
 
 ## More
 
