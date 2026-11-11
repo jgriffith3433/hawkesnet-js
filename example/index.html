@@ -210,6 +210,20 @@ net.join('quickstart');</pre>
   }
   const q = new URLSearchParams(location.search);
   const endpoint = q.get('net') || undefined;
+  const playtestId = q.get('playtest') || '';
+  // Single-browser playtests (?playtest=smoke etc.) without ?room= used to share t-js-demo with strangers and leftover
+  // bots. Mint a one-shot room into the URL before lobby() so nameFor() isolates this run. two-players must get the
+  // same ?room= from Studio's peers runner on every browser — do not mint there (each tab would pick a different id).
+  if (playtestId && playtestId !== 'two-players' && !q.get('room')) {
+    const room = `pt${Math.random().toString(36).slice(2, 10)}`;
+    const keep = new URLSearchParams();
+    keep.set('room', room);
+    for (const k of ['project', 'net', 'round', 'name', 'playtest', 'seed', 'peer', 'at']) {
+      if (q.get(k)) keep.set(k, q.get(k));
+    }
+    history.replaceState(null, '', `${location.pathname}?${keep}${location.hash || ''}`);
+    q.set('room', room);
+  }
   document.getElementById('net').dataset.version = VERSION;
   document.getElementById('net').textContent = `@hawkesgen/net ${VERSION} on ` + (endpoint || globalThis.HAWKES_NET_ENDPOINT || 'https://net.hawkesgen.ai').replace(/^https?:\/\//, '');
   // Name and colour stick in this tab (sessionStorage) so a fresh-ticket rejoin still looks like the same player.
@@ -224,7 +238,17 @@ net.join('quickstart');</pre>
   saveSelf({ name, color: myColor });
   // No liveHosts: every page gets the project's free test rooms.
   // Only name an endpoint when asked: an endpoint given as undefined would override the SDK's default.
-  const opts = { project: q.get('project') || 'netdemo', transport: 'relay', ...(endpoint ? { endpoint } : {}) };
+  // Playtests: away:false so a covered Studio peer tab is not auto-ghosted (AWAY_AFTER_MS) — the demo freezes away
+  // peers' drawn spots, which made "The other player's moves show here" time out. Socket-drop away still works.
+  // Gen's peers path adds ?room=&peer= and calls start() (often with no ?playtest= in the URL).
+  const peerParam = q.get('peer');
+  const inPlaytest = Boolean(playtestId || (peerParam != null && peerParam !== ''));
+  const opts = {
+    project: q.get('project') || 'netdemo',
+    transport: 'relay',
+    ...(endpoint ? { endpoint } : {}),
+    ...(inPlaytest ? { away: false } : {}),
+  };
   const net = lobby({ ...opts, name });
   // ?round=N (seconds) shortens host-owned Tag rounds for playtests; default is 60 s.
   const roundSec = Math.max(1, Math.min(600, Number(q.get('round')) || 60));

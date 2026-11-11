@@ -273,3 +273,16 @@ test('demo head stub lists real scenarios and hands off start() after installNet
   assert.match(indexSrc, /__hawkesDemoBoot\.takePending/);
   assert.match(indexSrc, /upgradedAt\s*=\s*performance\.now\(\)/);
 });
+
+// Pins the two-players flake: shared t-js-demo + a covered peer tab marked away froze shownPos (moves timed out).
+test('two-players playtest isolates the room and keeps covered peers present', () => {
+  const indexSrc = readFileSync(new URL('../example/index.html', import.meta.url), 'utf8');
+  assert.match(indexSrc, /playtestId\s*!==\s*'two-players'/, 'single-browser playtests mint ?room=; two-players does not');
+  assert.match(indexSrc, /away:\s*false/, 'playtests pass away:false so a covered Studio tab is not auto-ghosted');
+  assert.match(indexSrc, /peerParam/, 'Gen peers (?peer=) also count as inPlaytest when ?playtest= is absent');
+  const bot = readFileSync(new URL('../example/net-playtest.mjs', import.meta.url), 'utf8');
+  assert.match(bot, /Studio opened a peer browser \(\?peer=\)/, 'twoPlayers requires Gen\'s ?peer= before waiting for a roster mate');
+  assert.match(bot, /Studio gave a unique \?room=/, 'twoPlayers hard-fails without ?room= instead of sharing the public demo room');
+  assert.match(bot, /two-players needs Studio peers≥2/, 'the hard-fail names runner fault, not a Net join bug');
+  assert.match(bot, /keepPresent/, 'start() path forces room.o.away=false (Gen often has no ?playtest= in the URL)');
+});
